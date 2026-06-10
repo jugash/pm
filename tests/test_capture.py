@@ -5,6 +5,7 @@ from perfbench.capture.preflight import (
     SEV_FATAL,
     fatal_failures,
     parse_cpu_list,
+    parse_cpu_mask,
     run_preflight,
 )
 from perfbench.runner.base import ExecResult, FakeExecutor
@@ -39,6 +40,13 @@ class TestParseCpuList(unittest.TestCase):
         self.assertEqual(parse_cpu_list("3"), {3})
         self.assertEqual(parse_cpu_list("2-5,8,10-11"), {2, 3, 4, 5, 8, 10, 11})
         self.assertEqual(parse_cpu_list(" 1, 2 \n"), {1, 2})
+
+    def test_mask_forms(self):
+        self.assertEqual(parse_cpu_mask(""), set())
+        self.assertEqual(parse_cpu_mask("3"), {0, 1})
+        self.assertEqual(parse_cpu_mask("f"), {0, 1, 2, 3})
+        self.assertEqual(parse_cpu_mask("00000000,00000003"), {0, 1})
+        self.assertEqual(parse_cpu_mask("100"), {8})
 
 
 class TestPreflight(unittest.TestCase):
@@ -82,6 +90,58 @@ class TestPreflight(unittest.TestCase):
         responses["isolated"] = _fail("no such file")
         fatals = fatal_failures(run_preflight(FakeExecutor(responses=responses), make_scenario()))
         self.assertEqual([f.name for f in fatals], ["cpu_isolation"])
+
+    def _isolation(self, results):
+        return [r for r in results if r.name == "cpu_isolation"][0]
+
+    def test_tuned_non_isolcpus_satisfies_isolation(self):
+        # isolcpus empty, but tuned cpu-partitioning isolates everything
+        # except housekeeping cpus 0-1 (mask 0x3) on a 0-7 machine
+        responses = dict(GOOD_HOST)
+        responses["isolated"] = _ok("")
+        responses["/proc/cmdline"] = _ok(
+            "BOOT_IMAGE=vmlinuz root=/dev/sda1 tuned.non_isolcpus=00000003 "
+            "skew_tick=1 nohz=on"
+        )
+        responses["cpu/present"] = _ok("0-7")
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        check = self._isolation(results)
+        self.assertTrue(check.passed, check.message)
+        self.assertIn("tuned.non_isolcpus", check.message)
+
+    def test_tuned_mask_insufficient_still_fatal(self):
+        # housekeeping mask covers cpu 4 -> scenario core 4 NOT isolated
+        responses = dict(GOOD_HOST)
+        responses["isolated"] = _ok("")
+        responses["/proc/cmdline"] = _ok("tuned.non_isolcpus=00000013")  # 0,1,4
+        responses["cpu/present"] = _ok("0-7")
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        check = self._isolation(results)
+        self.assertFalse(check.passed)
+        self.assertIn("[4]", check.message)
+
+    def test_no_tuned_param_keeps_original_failure(self):
+        responses = dict(GOOD_HOST)
+        responses["isolated"] = _ok("")
+        responses["/proc/cmdline"] = _ok("BOOT_IMAGE=vmlinuz quiet")
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        check = self._isolation(results)
+        self.assertFalse(check.passed)
+        self.assertIn("source=isolcpus", check.message)
+
+    def test_tuned_fallback_unreadable_present_fails_closed(self):
+        responses = dict(GOOD_HOST)
+        responses["isolated"] = _ok("")
+        responses["/proc/cmdline"] = _ok("tuned.non_isolcpus=3")
+        responses["cpu/present"] = _fail("unreadable")
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        self.assertFalse(self._isolation(results).passed)
+
+    def test_isolcpus_alone_still_passes(self):
+        results = run_preflight(FakeExecutor(responses=dict(GOOD_HOST)), make_scenario())
+        check = self._isolation(results)
+        self.assertTrue(check.passed)
+        self.assertIn("source: isolcpus", check.message)
 
     def test_isolation_check_disabled(self):
         scenario = make_scenario(

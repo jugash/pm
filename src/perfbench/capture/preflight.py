@@ -9,8 +9,9 @@ SMT, THP).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Optional
 
 from perfbench.config.schema import NetworkPath, Scenario
 from perfbench.runner.base import Executor
@@ -33,6 +34,22 @@ class CheckResult:
             "severity": self.severity,
             "message": self.message,
         }
+
+
+def parse_cpu_mask(mask: str) -> set[int]:
+    """Parse a hex CPU mask, optionally comma-grouped: 'f', '00000000,00000003'."""
+    mask = mask.strip().replace(",", "")
+    if not mask:
+        return set()
+    value = int(mask, 16)
+    cpus: set[int] = set()
+    bit = 0
+    while value:
+        if value & 1:
+            cpus.add(bit)
+        value >>= 1
+        bit += 1
+    return cpus
 
 
 def parse_cpu_list(text: str) -> set[int]:
@@ -79,6 +96,27 @@ def check_irqbalance(executor: Executor, scenario: Scenario, role: str) -> Check
     )
 
 
+def _tuned_isolated_cpus(executor: Executor) -> Optional[set[int]]:
+    """Isolated CPUs implied by tuned cpu-partitioning, if configured.
+
+    The cpu-partitioning profile does not use ``isolcpus=`` (so
+    /sys/devices/system/cpu/isolated is empty); instead the kernel cmdline
+    carries ``tuned.non_isolcpus=<hexmask>`` naming the *housekeeping* CPUs
+    — every other present CPU is isolated (via systemd CPUAffinity + tuned).
+    """
+    cmdline = executor.run("cat /proc/cmdline", timeout=10)
+    if not cmdline.ok:
+        return None
+    match = re.search(r"\btuned\.non_isolcpus=([0-9a-fA-F,]+)", cmdline.stdout)
+    if not match:
+        return None
+    present = executor.run("cat /sys/devices/system/cpu/present", timeout=10)
+    if not present.ok:
+        return None
+    housekeeping = parse_cpu_mask(match.group(1))
+    return parse_cpu_list(present.stdout) - housekeeping
+
+
 def check_isolation(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
     needed = set(scenario.cpu.cores_for_role(role))
     if not scenario.cpu.require_isolated:
@@ -89,14 +127,28 @@ def check_isolation(executor: Executor, scenario: Scenario, role: str) -> CheckR
             "cpu_isolation", False, SEV_FATAL, "cannot read isolated cpu list"
         )
     isolated = parse_cpu_list(result.stdout)
-    missing = sorted(needed - isolated)
+    source = "isolcpus"
+    missing = needed - isolated
+
+    if missing:
+        # fall back to tuned cpu-partitioning (tuned.non_isolcpus=<mask>)
+        tuned_isolated = _tuned_isolated_cpus(executor)
+        if tuned_isolated is not None:
+            isolated |= tuned_isolated
+            missing = needed - isolated
+            source = "isolcpus + tuned.non_isolcpus"
+
+    missing_sorted = sorted(missing)
     return CheckResult(
         name="cpu_isolation",
-        passed=not missing,
+        passed=not missing_sorted,
         severity=SEV_FATAL,
-        message=f"benchmark cores not isolated: {missing} (isolated={sorted(isolated)})"
-        if missing
-        else f"cores {sorted(needed)} are isolated",
+        message=(
+            f"benchmark cores not isolated: {missing_sorted} "
+            f"(isolated={sorted(isolated)}, source={source})"
+        )
+        if missing_sorted
+        else f"cores {sorted(needed)} are isolated (source: {source})",
     )
 
 

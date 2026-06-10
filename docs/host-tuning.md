@@ -72,9 +72,22 @@ are a classic tail-latency source.
 
 ## tuned (alternative to hand-tuning)
 
-`tuned-adm profile network-latency` covers governor/THP/busy-poll in one
-step; still verify isolation and irqbalance yourself. The active profile is
-captured in every run record.
+Two relevant profiles:
+
+- `tuned-adm profile network-latency` — covers governor/THP/busy-poll in
+  one step; combine with explicit `isolcpus=` kernel args.
+- `tuned-adm profile cpu-partitioning` — full isolation managed by tuned.
+  Configure housekeeping cores in `/etc/tuned/cpu-partitioning-variables.conf`
+  (`isolated_cores=2-7`); tuned then boots with
+  `tuned.non_isolcpus=<hexmask>` (a mask of the *housekeeping* CPUs) instead
+  of `isolcpus=`, so `/sys/devices/system/cpu/isolated` stays empty.
+  **Preflight understands this**: when the sysfs isolated list doesn't cover
+  the scenario cores, it parses `tuned.non_isolcpus` from `/proc/cmdline`
+  and treats every present CPU outside the housekeeping mask as isolated
+  (the check message reports which source satisfied it).
+
+Either way, still verify irqbalance yourself; the active profile is captured
+in every run record.
 
 ## Verifying the setup
 
