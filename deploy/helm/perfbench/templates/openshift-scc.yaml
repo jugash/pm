@@ -45,4 +45,38 @@ volumes:
 users:
   - system:serviceaccount:{{ .Release.Namespace }}:{{ include "perfbench.fullname" . }}
   - system:serviceaccount:{{ .Release.Namespace }}:default
+---
+# Separate, deliberately narrow SCC for the short-lived node-check debug pods
+# (host-level preflight): these need privileged + hostPID, which the
+# benchmark pods must NOT have.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ include "perfbench.fullname" . }}-nodecheck
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+allowPrivilegedContainer: true
+allowHostPID: true
+allowHostDirVolumePlugin: true
+allowHostNetwork: false
+allowHostPorts: false
+allowHostIPC: false
+readOnlyRootFilesystem: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+fsGroup:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - hostPath
+  - emptyDir
+  - projected
+  - secret
+  - downwardAPI
+users:
+  - system:serviceaccount:{{ .Release.Namespace }}:{{ include "perfbench.fullname" . }}
+  - system:serviceaccount:{{ .Release.Namespace }}:default
 {{- end }}
