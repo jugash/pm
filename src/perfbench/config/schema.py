@@ -1,0 +1,332 @@
+"""Typed scenario schema with strict validation.
+
+Implemented with dataclasses + explicit validation (no third-party schema
+library) so the framework runs on minimal hosts. Every ``from_dict`` raises
+:class:`perfbench.errors.SchemaError` carrying a dotted document path on
+invalid input.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Mapping, Optional, Sequence
+
+from perfbench.errors import SchemaError
+
+_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+
+
+class Platform(str, Enum):
+    BAREMETAL = "baremetal"
+    K8S = "k8s"
+
+
+class NetworkPath(str, Enum):
+    KERNEL = "kernel"
+    ONLOAD = "onload"
+    EFVI = "efvi"
+
+
+class BondMode(str, Enum):
+    NONE = "none"
+    ACTIVE_BACKUP = "active_backup"
+    LACP = "lacp_8023ad"
+
+
+class Protocol(str, Enum):
+    TCP = "tcp"
+    UDP = "udp"
+
+
+# ---------------------------------------------------------------------------
+# validation helpers
+# ---------------------------------------------------------------------------
+
+def _expect_mapping(value: Any, path: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise SchemaError(path, f"expected a mapping, got {type(value).__name__}")
+    return value
+
+
+def _expect_list(value: Any, path: str) -> Sequence[Any]:
+    if not isinstance(value, (list, tuple)):
+        raise SchemaError(path, f"expected a list, got {type(value).__name__}")
+    return value
+
+
+def _expect_str(value: Any, path: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SchemaError(path, f"expected a non-empty string, got {value!r}")
+    return value
+
+
+def _expect_int(value: Any, path: str, minimum: Optional[int] = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SchemaError(path, f"expected an integer, got {value!r}")
+    if minimum is not None and value < minimum:
+        raise SchemaError(path, f"expected >= {minimum}, got {value}")
+    return value
+
+
+def _coerce_enum(enum_cls, value: Any, path: str):
+    try:
+        return enum_cls(value)
+    except ValueError:
+        allowed = ", ".join(e.value for e in enum_cls)
+        raise SchemaError(path, f"invalid value {value!r}; allowed: {allowed}") from None
+
+
+def _int_tuple(value: Any, path: str) -> tuple[int, ...]:
+    items = _expect_list(value, path)
+    return tuple(_expect_int(v, f"{path}[{i}]", minimum=0) for i, v in enumerate(items))
+
+
+def _reject_unknown(data: Mapping[str, Any], known: set[str], path: str) -> None:
+    unknown = set(data) - known
+    if unknown:
+        raise SchemaError(path, f"unknown keys: {sorted(unknown)}")
+
+
+# ---------------------------------------------------------------------------
+# model objects
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class NicPort:
+    """One physical NIC port participating in a scenario."""
+
+    name: str  # OS interface name, e.g. ens1f0
+    card: str = ""  # human label, e.g. "x2522-a"
+    pci: str = ""  # PCI address, e.g. 0000:3b:00.0
+    numa_node: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "nic.ports") -> "NicPort":
+        data = _expect_mapping(data, path)
+        _reject_unknown(data, {"name", "card", "pci", "numa_node"}, path)
+        numa = data.get("numa_node")
+        if numa is not None:
+            numa = _expect_int(numa, f"{path}.numa_node", minimum=0)
+        return cls(
+            name=_expect_str(data.get("name"), f"{path}.name"),
+            card=str(data.get("card", "")),
+            pci=str(data.get("pci", "")),
+            numa_node=numa,
+        )
+
+
+@dataclass(frozen=True)
+class NicLayout:
+    """NIC/bonding layout under test."""
+
+    ports: tuple[NicPort, ...]
+    bond_mode: BondMode = BondMode.NONE
+    bond_name: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "nic") -> "NicLayout":
+        data = _expect_mapping(data, path)
+        _reject_unknown(data, {"ports", "bond_mode", "bond_name"}, path)
+        ports_raw = _expect_list(data.get("ports", []), f"{path}.ports")
+        if not ports_raw:
+            raise SchemaError(f"{path}.ports", "at least one port is required")
+        ports = tuple(
+            NicPort.from_dict(p, f"{path}.ports[{i}]") for i, p in enumerate(ports_raw)
+        )
+        bond_mode = _coerce_enum(BondMode, data.get("bond_mode", "none"), f"{path}.bond_mode")
+        bond_name = data.get("bond_name")
+        if bond_mode is not BondMode.NONE:
+            if len(ports) < 2:
+                raise SchemaError(f"{path}.ports", "bonded layouts need >= 2 ports")
+            if not bond_name:
+                raise SchemaError(f"{path}.bond_name", "required when bond_mode != none")
+        return cls(ports=ports, bond_mode=bond_mode, bond_name=bond_name)
+
+    @property
+    def interface(self) -> str:
+        """The interface traffic actually flows over (bond device or port)."""
+        return self.bond_name if self.bond_name else self.ports[0].name
+
+    def label(self) -> str:
+        if self.bond_mode is BondMode.NONE:
+            return f"none:{self.ports[0].name}"
+        return f"{self.bond_mode.value}:{self.bond_name}({len(self.ports)})"
+
+
+@dataclass(frozen=True)
+class CpuLayout:
+    """CPU pinning/isolation layout under test."""
+
+    client_cores: tuple[int, ...]
+    server_cores: tuple[int, ...]
+    irq_cores: tuple[int, ...] = ()
+    numa_node: Optional[int] = None
+    require_isolated: bool = True
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "cpu") -> "CpuLayout":
+        data = _expect_mapping(data, path)
+        _reject_unknown(
+            data,
+            {"client_cores", "server_cores", "irq_cores", "numa_node", "require_isolated"},
+            path,
+        )
+        client = _int_tuple(data.get("client_cores", []), f"{path}.client_cores")
+        server = _int_tuple(data.get("server_cores", []), f"{path}.server_cores")
+        irq = _int_tuple(data.get("irq_cores", []), f"{path}.irq_cores")
+        if not client:
+            raise SchemaError(f"{path}.client_cores", "at least one core is required")
+        if not server:
+            raise SchemaError(f"{path}.server_cores", "at least one core is required")
+        overlap = set(client) & set(irq)
+        if overlap:
+            raise SchemaError(
+                f"{path}.irq_cores",
+                f"irq_cores overlap client_cores: {sorted(overlap)}",
+            )
+        numa = data.get("numa_node")
+        if numa is not None:
+            numa = _expect_int(numa, f"{path}.numa_node", minimum=0)
+        require_isolated = data.get("require_isolated", True)
+        if not isinstance(require_isolated, bool):
+            raise SchemaError(f"{path}.require_isolated", "expected a boolean")
+        return cls(
+            client_cores=client,
+            server_cores=server,
+            irq_cores=irq,
+            numa_node=numa,
+            require_isolated=require_isolated,
+        )
+
+    def cores_for_role(self, role: str) -> tuple[int, ...]:
+        if role == "client":
+            return self.client_cores
+        if role == "server":
+            return self.server_cores
+        raise ValueError(f"unknown role: {role}")
+
+
+@dataclass(frozen=True)
+class OnloadTuning:
+    """Onload acceleration settings (profile + EF_* environment)."""
+
+    profile: Optional[str] = "latency"
+    env: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "onload") -> "OnloadTuning":
+        data = _expect_mapping(data, path)
+        _reject_unknown(data, {"profile", "env"}, path)
+        profile = data.get("profile", "latency")
+        if profile is not None and not isinstance(profile, str):
+            raise SchemaError(f"{path}.profile", "expected a string or null")
+        env_raw = data.get("env", {})
+        env_map = _expect_mapping(env_raw, f"{path}.env") if env_raw else {}
+        env = {str(k): str(v) for k, v in env_map.items()}
+        for key in env:
+            if not re.match(r"^[A-Z][A-Z0-9_]*$", key):
+                raise SchemaError(f"{path}.env.{key}", "expected an env-var style key")
+        return cls(profile=profile, env=env)
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """A benchmark tool invocation with tool-specific parameters."""
+
+    name: str
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "tools") -> "ToolSpec":
+        if isinstance(data, str):
+            data = {"name": data}
+        data = _expect_mapping(data, path)
+        _reject_unknown(data, {"name", "params"}, path)
+        name = _expect_str(data.get("name"), f"{path}.name")
+        if not _ID_RE.match(name):
+            raise SchemaError(f"{path}.name", f"invalid tool name {name!r}")
+        params = data.get("params", {})
+        params = dict(_expect_mapping(params, f"{path}.params")) if params else {}
+        return cls(name=name, params=params)
+
+
+@dataclass(frozen=True)
+class Scenario:
+    """One fully-specified benchmark configuration."""
+
+    id: str
+    platform: Platform
+    network_path: NetworkPath
+    nic: NicLayout
+    cpu: CpuLayout
+    tools: tuple[ToolSpec, ...]
+    onload: Optional[OnloadTuning] = None
+    description: str = ""
+    repetitions: int = 3
+    tags: tuple[str, ...] = ()
+
+    KNOWN_KEYS = {
+        "id", "platform", "network_path", "nic", "cpu", "tools",
+        "onload", "description", "repetitions", "tags",
+    }
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "scenario") -> "Scenario":
+        data = _expect_mapping(data, path)
+        _reject_unknown(data, cls.KNOWN_KEYS, path)
+
+        sid = _expect_str(data.get("id"), f"{path}.id")
+        if not _ID_RE.match(sid):
+            raise SchemaError(f"{path}.id", f"invalid scenario id {sid!r}")
+
+        platform = _coerce_enum(Platform, data.get("platform"), f"{path}.platform")
+        network_path = _coerce_enum(
+            NetworkPath, data.get("network_path"), f"{path}.network_path"
+        )
+        nic = NicLayout.from_dict(data.get("nic"), f"{path}.nic")
+        cpu = CpuLayout.from_dict(data.get("cpu"), f"{path}.cpu")
+
+        tools_raw = _expect_list(data.get("tools", []), f"{path}.tools")
+        if not tools_raw:
+            raise SchemaError(f"{path}.tools", "at least one tool is required")
+        tools = tuple(
+            ToolSpec.from_dict(t, f"{path}.tools[{i}]") for i, t in enumerate(tools_raw)
+        )
+
+        onload = None
+        if data.get("onload") is not None:
+            onload = OnloadTuning.from_dict(data["onload"], f"{path}.onload")
+        if network_path is NetworkPath.KERNEL and onload is not None:
+            raise SchemaError(
+                f"{path}.onload", "onload tuning is meaningless with network_path=kernel"
+            )
+        if network_path is NetworkPath.ONLOAD and onload is None:
+            onload = OnloadTuning()
+
+        repetitions = _expect_int(data.get("repetitions", 3), f"{path}.repetitions", minimum=1)
+        tags_raw = data.get("tags", [])
+        tags = tuple(str(t) for t in _expect_list(tags_raw, f"{path}.tags")) if tags_raw else ()
+
+        return cls(
+            id=sid,
+            platform=platform,
+            network_path=network_path,
+            nic=nic,
+            cpu=cpu,
+            tools=tools,
+            onload=onload,
+            description=str(data.get("description", "")),
+            repetitions=repetitions,
+            tags=tags,
+        )
+
+    def labels(self) -> dict[str, str]:
+        """Canonical label set used in metrics and result records."""
+        return {
+            "scenario": self.id,
+            "platform": self.platform.value,
+            "network_path": self.network_path.value,
+            "bond": self.nic.bond_mode.value,
+        }

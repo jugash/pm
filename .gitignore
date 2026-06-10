@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.coverage
+htmlcov/
+results/
+*.sqlite
+*.db
+.venv/
+dist/
+build/
+exporter-state.jsonl
