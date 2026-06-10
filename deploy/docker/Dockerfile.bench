@@ -1,6 +1,10 @@
 # PerfBench benchmark pod image (UBI 9, OpenShift-ready): the open-source
 # tools the harness drives.
 #
+# Build (no repo files copied, context doesn't matter, but for consistency):
+#   docker build -f deploy/docker/Dockerfile.bench -t perfbench-bench:0.1.0 .
+# or: make image-bench
+#
 # Notes for OCP builds:
 # - rt-tests and iperf3 live in RHEL AppStream. UBI's public repos carry a
 #   subset; on an entitled build (OpenShift BuildConfig on RHEL nodes, or

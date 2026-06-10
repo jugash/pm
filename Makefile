@@ -5,8 +5,24 @@
 # same suite under pytest/pytest-cov when the dev extras are installed.
 
 PY ?= python3
+DOCKER ?= docker        # or podman
+VERSION ?= 0.1.0
+REGISTRY ?= ghcr.io/jugash
 
-.PHONY: test pytest coverage validate clean
+.PHONY: test pytest coverage validate clean images image-exporter image-runner image-bench
+
+# Image builds MUST run from the repo root: COPY paths in the Dockerfiles
+# are relative to the build context.
+image-exporter:
+	$(DOCKER) build -f deploy/docker/Dockerfile.exporter -t $(REGISTRY)/perfbench-exporter:$(VERSION) .
+
+image-runner:
+	$(DOCKER) build -f deploy/docker/Dockerfile.runner -t $(REGISTRY)/perfbench-runner:$(VERSION) .
+
+image-bench:
+	$(DOCKER) build -f deploy/docker/Dockerfile.bench -t $(REGISTRY)/perfbench-bench:$(VERSION) .
+
+images: image-exporter image-runner image-bench
 
 test:
 	$(PY) scripts/run_tests.py --fail-under 90

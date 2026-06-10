@@ -1,5 +1,10 @@
 # PerfBench in-cluster runner image (UBI 9, OpenShift-ready): harness CLI +
 # the OpenShift client (oc provides kubectl).
+#
+# Build from the REPO ROOT (the COPY paths are relative to the build
+# context, not to this file):
+#   docker build -f deploy/docker/Dockerfile.runner -t perfbench-runner:0.1.0 .
+# or: make image-runner
 FROM registry.access.redhat.com/ubi9/python-312:latest
 
 USER 0

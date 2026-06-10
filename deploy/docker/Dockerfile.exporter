@@ -1,4 +1,8 @@
 # PerfBench results exporter image (UBI 9, OpenShift-ready).
+#
+# Build from the REPO ROOT (COPY paths are relative to the build context):
+#   docker build -f deploy/docker/Dockerfile.exporter -t perfbench-exporter:0.1.0 .
+# or: make image-exporter
 FROM registry.access.redhat.com/ubi9/python-312:latest
 
 WORKDIR /opt/perfbench

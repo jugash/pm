@@ -1,0 +1,22 @@
+# Keep image build contexts small; only pyproject.toml, README.md and src/
+# are copied into images.
+.git
+tests/
+docs/
+deploy/
+scenarios/
+scripts/
+results/
+__pycache__/
+*.pyc
+*.egg-info/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.sqlite
+*.db
+exporter-state.jsonl
+Makefile
+.gitignore
