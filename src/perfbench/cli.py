@@ -309,6 +309,21 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
     failed = 0
     for sc in scenarios_k8s:
         try:
+            node_results: list[dict] = []
+            if not skip_preflight:
+                click.echo(f"[{sc.id}] running host-level node checks")
+                node_results = session.node_preflight(sc)
+                for r in node_results:
+                    mark = "PASS" if r["passed"] else (
+                        "FATAL" if r["severity"] == "fatal" else "WARN")
+                    click.echo(f"  [{mark:5}] {r['target']} {r['name']}: {r['message']}")
+                node_fatals = [r for r in node_results
+                               if not r["passed"] and r["severity"] == "fatal"]
+                if node_fatals:
+                    click.echo(f"ERROR [{sc.id}]: fatal node-level preflight failures",
+                               err=True)
+                    failed += 1
+                    continue
             click.echo(f"[{sc.id}] provisioning pods in namespace {namespace}")
             deployment = session.provision(sc)
             click.echo(
@@ -325,7 +340,9 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
                 settle_s=settle,
                 on_event=click.echo,
             )
-            records = orch.run_scenario(sc, skip_preflight=skip_preflight)
+            records = orch.run_scenario(
+                sc, skip_preflight=skip_preflight, extra_preflight=node_results
+            )
             failed += _report_records(records, sc.id, push_url)
         except PerfBenchError as exc:
             click.echo(f"ERROR [{sc.id}]: {exc}", err=True)

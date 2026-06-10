@@ -275,6 +275,32 @@ class TestK8sRunCommand(CliTestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("ERROR", result.output)
 
+    def test_node_preflight_runs_when_not_skipped(self):
+        from perfbench.runner.base import ExecResult
+
+        # irqbalance "found" on the node -> fatal -> scenario aborts before pods
+        self.fake.responses["pgrep -x irqbalance"] = ExecResult("", 0, stdout="812")
+        self.fake.responses["tuned-adm active"] = ExecResult("", 0, stdout="balanced")
+        self.fake.responses["/proc/interrupts"] = ExecResult("", 0, stdout="")
+        import unittest.mock as mock
+        from perfbench.runner.k8s import Kubectl
+
+        def factory(namespace, context, kubeconfig):
+            return Kubectl(namespace=namespace, executor=self.fake)
+
+        with mock.patch("perfbench.cli._make_kubectl", side_effect=factory):
+            result = self.runner.invoke(main, [
+                "k8s-run", str(self.k8s_file), "--image", "bench:1",
+                "--client-node", "wa", "--server-node", "wb",
+                "--db", str(self.dir / "n.sqlite"),
+                "--output-dir", str(self.dir / "nraw"), "--settle", "0",
+            ])
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("node_irqbalance", result.output)
+        self.assertIn("fatal node-level preflight", result.output)
+        # benchmark pods never provisioned
+        self.assertFalse(any("exec pb-k8s-echo-client" in c for c in self.fake.calls))
+
 
 class TestPreflightCommand(CliTestCase):
     def test_preflight_local_fails_fatally(self):

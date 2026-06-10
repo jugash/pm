@@ -117,12 +117,27 @@ pod. So these checks genuinely verify the node the pod landed on:
 | `onload` | the pod image — verifies the userland is present |
 | `irqbalance` | **cannot see host processes** (PID namespace) |
 
-The irqbalance blind spot is handled honestly: the check detects it's inside
-a container (pid 1 isn't systemd/init) and reports a *warning* — "cannot
-verify from container, check the node" — instead of a vacuous pass. On OCP,
-the PerformanceProfile disables irqbalance on isolated cores for you; verify
-once per node with
-`oc debug node/worker-a -- chroot /host pgrep -x irqbalance`.
+The irqbalance blind spot is handled at two levels:
+
+1. **Honest in-pod check** — the check detects it's inside a container
+   (pid 1 isn't systemd/init) and reports a *warning* — "cannot verify from
+   container, check the node" — instead of a vacuous pass.
+2. **Host-level node checks** — when nodes are pinned
+   (`--client-node`/`--server-node`, or `runner.clientNode/serverNode`),
+   `k8s-run` first launches a short-lived privileged `hostPID` debug pod on
+   each benchmark node (host root read-only at `/host`, like `oc debug
+   node/…`) and verifies, on the actual node:
+   - `node_irqbalance` — a real pgrep against host PIDs (fatal if running);
+   - `nic_irq_affinity` — the scenario NIC's IRQs from `/proc/interrupts`
+     must not overlap the benchmark cores (fatal) and should sit on the
+     declared `irq_cores` (warning otherwise);
+   - `node_tuned` — active tuned/PerformanceProfile (warning if it isn't a
+     latency/performance profile).
+
+   Fatal node failures abort the scenario *before* any benchmark pod is
+   created; all node-check results are recorded in each run's preflight
+   section. The debug pod is allowed by the chart's SCC (privileged is
+   required for hostPID); it is deleted immediately after the checks.
 
 Note also: the scenario's `cpu.client_cores` are used for `taskset` inside
 the pod and for the isolation check; with the static CPU manager the pod is

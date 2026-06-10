@@ -128,6 +128,53 @@ class PodExecutor(Executor):
         return self.kubectl.executor.start(self._exec_command(command, env))
 
 
+def render_node_check_pod(
+    name: str,
+    node: str,
+    image: str,
+    namespace: str = "perfbench",
+) -> str:
+    """Privileged hostPID debug pod for host-level preflight.
+
+    hostPID exposes the node's processes (real irqbalance check); the host
+    root is mounted read-only at /host for chroot-based checks (tuned).
+    Equivalent in spirit to ``oc debug node/...`` but pinned, labelled and
+    machine-managed.
+    """
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {"app": "perfbench", "perfbench/role": "node-check"},
+        },
+        "spec": {
+            "restartPolicy": "Never",
+            "terminationGracePeriodSeconds": 1,
+            "nodeName": node,
+            "hostPID": True,
+            "containers": [
+                {
+                    "name": "check",
+                    "image": image,
+                    "command": ["sleep", "infinity"],
+                    "securityContext": {"privileged": True},
+                    "resources": {
+                        "requests": {"cpu": "50m", "memory": "64Mi"},
+                        "limits": {"cpu": "500m", "memory": "128Mi"},
+                    },
+                    "volumeMounts": [
+                        {"name": "host", "mountPath": "/host", "readOnly": True}
+                    ],
+                }
+            ],
+            "volumes": [{"name": "host", "hostPath": {"path": "/"}}],
+        },
+    }
+    return yaml.safe_dump(manifest, sort_keys=False)
+
+
 @dataclass
 class BenchDeployment:
     """A provisioned client/server pod pair for one scenario."""
@@ -208,6 +255,47 @@ class K8sBenchSession:
     def teardown(self, deployment: BenchDeployment) -> None:
         self.kubectl.delete_pod(deployment.client_pod)
         self.kubectl.delete_pod(deployment.server_pod)
+
+    def node_preflight(self, scenario: Scenario) -> list[dict]:
+        """Host-level checks on each pinned benchmark node via debug pods.
+
+        Returns check dicts tagged with the node; nodes that aren't pinned
+        are reported as skipped (the scheduler could place the pod anywhere,
+        so there is no node to check ahead of time).
+        """
+        from perfbench.capture.nodecheck import run_node_checks
+
+        results: list[dict] = []
+        checked: set[str] = set()
+        for role in ("client", "server"):
+            node = self.nodes[role]
+            if not node:
+                results.append(
+                    {
+                        "target": f"node:{role}",
+                        "name": "node_checks",
+                        "passed": False,
+                        "severity": "warning",
+                        "message": f"no --{role}-node pinned; host-level checks skipped",
+                    }
+                )
+                continue
+            key = f"{node}:{role}"
+            if key in checked:
+                continue
+            checked.add(key)
+            pod = f"pb-nodecheck-{node}".replace(".", "-").replace("_", "-")[:63].rstrip("-")
+            self.kubectl.apply(
+                render_node_check_pod(pod, node, self.image, self.kubectl.namespace)
+            )
+            try:
+                self.kubectl.wait_ready(pod, self.ready_timeout_s)
+                executor = PodExecutor(self.kubectl, pod)
+                checks = run_node_checks(executor, scenario, role)
+            finally:
+                self.kubectl.delete_pod(pod)
+            results.extend({"target": f"node:{node}", **c.to_dict()} for c in checks)
+        return results
 
     def teardown_scenario(self, scenario: Scenario) -> None:
         """Best-effort cleanup by name — safe even if provisioning failed

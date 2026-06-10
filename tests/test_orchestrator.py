@@ -83,6 +83,17 @@ class TestRunScenario(unittest.TestCase):
             _orchestrator(client, server).run_scenario(make_scenario())
         self.assertIn("irqbalance", str(ctx.exception))
 
+    def test_extra_preflight_recorded(self):
+        client, server = _executors()
+        extra = [{"target": "node:w1", "name": "node_irqbalance", "passed": True,
+                  "severity": "fatal", "message": "ok"}]
+        records = _orchestrator(client, server).run_scenario(
+            make_scenario(), extra_preflight=extra
+        )
+        targets = [p["target"] for p in records[0].preflight]
+        self.assertEqual(targets[0], "node:w1")
+        self.assertIn("client", targets)
+
     def test_skip_preflight(self):
         client, server = _executors()
         client.responses["pgrep -x irqbalance"] = _ok("999")

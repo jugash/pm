@@ -127,6 +127,44 @@ class TestK8sBenchSession(unittest.TestCase):
         deployment = session.provision(make_scenario())
         self.assertEqual(deployment.server_address, "10.2.3.4")
 
+    def test_node_preflight_with_pinned_nodes(self):
+        responses = {
+            "pgrep -x irqbalance": ExecResult("", 1),
+            "tuned-adm active": ExecResult("", 0, stdout="network-latency"),
+            "/proc/interrupts": ExecResult("", 0, stdout="141"),
+            "smp_affinity_list": ExecResult("", 0, stdout="6"),
+        }
+        session, fake = self._session(responses=responses)
+        results = session.node_preflight(make_scenario())
+        # debug pods created and removed for both nodes
+        applies = [c for c in fake.calls if "apply -f -" in c]
+        deletes = [c for c in fake.calls if "delete pod pb-nodecheck-" in c]
+        self.assertEqual(len(applies), 2)
+        self.assertEqual(len(deletes), 2)
+        targets = {r["target"] for r in results}
+        self.assertEqual(targets, {"node:worker-a", "node:worker-b"})
+        self.assertTrue(all(r["passed"] for r in results))
+
+    def test_node_preflight_unpinned_reports_skip(self):
+        from perfbench.runner.k8s import K8sBenchSession
+
+        kubectl, _ = _kubectl()
+        session = K8sBenchSession(kubectl, image="img")
+        results = session.node_preflight(make_scenario())
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all("skipped" in r["message"] for r in results))
+        self.assertTrue(all(r["severity"] == "warning" for r in results))
+
+    def test_node_preflight_deletes_pod_on_check_failure(self):
+        session, fake = self._session(
+            responses={"--for=condition=Ready": ExecResult("", 1, stderr="timeout")}
+        )
+        from perfbench.errors import ExecutionError
+
+        with self.assertRaises(ExecutionError):
+            session.node_preflight(make_scenario())
+        self.assertTrue(any("delete pod pb-nodecheck-" in c for c in fake.calls))
+
     def test_executors_and_teardown(self):
         session, fake = self._session()
         deployment = session.provision(make_scenario())

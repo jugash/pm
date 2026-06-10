@@ -73,16 +73,21 @@ class Orchestrator:
     # -- execution ---------------------------------------------------------
 
     def run_scenario(
-        self, scenario: Scenario, skip_preflight: bool = False
+        self,
+        scenario: Scenario,
+        skip_preflight: bool = False,
+        extra_preflight: Optional[list[dict]] = None,
     ) -> list[RunRecord]:
-        preflight_results = []
+        """``extra_preflight``: pre-computed check dicts (e.g. node-level
+        checks from a k8s debug pod) recorded alongside in-target checks."""
+        preflight_results = list(extra_preflight or [])
         if skip_preflight:
             self.on_event(f"[{scenario.id}] preflight skipped")
         else:
             self.on_event(f"[{scenario.id}] running preflight")
             client_checks = run_preflight(self.client, scenario, role="client")
             server_checks = run_preflight(self.server, scenario, role="server")
-            preflight_results = [
+            preflight_results += [
                 {"target": "client", **c.to_dict()} for c in client_checks
             ] + [{"target": "server", **c.to_dict()} for c in server_checks]
             fatals = fatal_failures(client_checks) + fatal_failures(server_checks)
