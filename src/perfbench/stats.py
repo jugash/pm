@@ -98,6 +98,45 @@ def aggregate(measurements: Iterable[Measurement]) -> list[Aggregate]:
     return [groups[k] for k in order]
 
 
+def derive_jitter(measurements: list[Measurement]) -> list[Measurement]:
+    """Derive tail-jitter metrics from latency quantile measurements.
+
+    For every (tool, metric=*_ns, label-group) that has both a p50 and a
+    p99.9 (falling back to p99) quantile, emit ``<metric base>_jitter_ns`` =
+    high quantile − median. This is the "how much worse is the tail than
+    typical" number trading desks actually watch.
+    """
+    groups: dict[tuple, dict[str, Measurement]] = defaultdict(dict)
+    for m in measurements:
+        quantile = m.labels.get("quantile")
+        if quantile is None or not m.metric.endswith("_ns"):
+            continue
+        key_labels = tuple(
+            sorted((k, v) for k, v in m.labels.items() if k != "quantile")
+        )
+        groups[(m.tool, m.metric, m.unit, key_labels)][quantile] = m
+
+    derived: list[Measurement] = []
+    for (tool, metric, unit, key_labels), quantiles in groups.items():
+        median = quantiles.get("0.5")
+        tail = quantiles.get("0.999") or quantiles.get("0.99")
+        if median is None or tail is None:
+            continue
+        labels = dict(key_labels)
+        labels["tail_quantile"] = tail.labels["quantile"]
+        base = metric[: -len("_ns")]
+        derived.append(
+            Measurement(
+                tool=tool,
+                metric=f"{base}_jitter_ns",
+                value=max(0.0, tail.value - median.value),
+                unit=unit,
+                labels=labels,
+            )
+        )
+    return derived
+
+
 def by_metric(aggregates: Iterable[Aggregate]) -> dict[str, list[Aggregate]]:
     out: dict[str, list[Aggregate]] = defaultdict(list)
     for agg in aggregates:

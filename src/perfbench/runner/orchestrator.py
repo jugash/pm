@@ -27,6 +27,7 @@ from perfbench.config.schema import Scenario
 from perfbench.errors import ParseError, PreflightError
 from perfbench.results.models import Measurement, RunRecord, ToolRun, new_run_id, utc_now_iso
 from perfbench.results.store import ResultStore
+from perfbench.stats import derive_jitter
 from perfbench.runner.base import Executor
 from perfbench.tools.base import ToolAdapter, create_tool
 
@@ -161,6 +162,7 @@ class Orchestrator:
             self.on_event(f"[{scenario.id}] {plan.adapter.name} PARSE ERROR: {exc}")
             return tool_run
 
+        measurements.extend(derive_jitter(measurements))
         tool_run.measurements = self._stamp(measurements, scenario)
         return tool_run
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import time
 from typing import Mapping, Optional
@@ -21,13 +22,21 @@ class LocalBackground(BackgroundProcess):
     def running(self) -> bool:
         return self._proc.poll() is None
 
+    def _signal_group(self, sig: int) -> None:
+        """Signal the whole process group so children (the actual benchmark
+        binary under sh/taskset/onload) die too and release the pipes."""
+        try:
+            os.killpg(os.getpgid(self._proc.pid), sig)
+        except (ProcessLookupError, PermissionError):  # already gone
+            pass
+
     def stop(self) -> ExecResult:
         if self._proc.poll() is None:
-            self._proc.terminate()
+            self._signal_group(signal.SIGTERM)
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-                self._proc.kill()
+                self._signal_group(signal.SIGKILL)
         stdout, stderr = self._proc.communicate()
         return ExecResult(
             command=self.command,
@@ -86,5 +95,6 @@ class LocalExecutor(Executor):
             stderr=subprocess.PIPE,
             text=True,
             env=self._merged_env(env),
+            start_new_session=True,  # own process group; see _signal_group
         )
         return LocalBackground(command, proc)
