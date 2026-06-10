@@ -1,0 +1,72 @@
+# Bonding layout comparison: single port vs dual-port-same-card
+# (active-backup) vs dual-card (active-backup and LACP).
+#
+# Note: Onload accelerates bonded interfaces with mode-dependent
+# constraints; failover behaviour is a separate measurement (see
+# docs/methodology.md - failover testing is manual in cut one).
+
+scenarios:
+  - id: bond-none-single
+    description: Baseline single port, no bond
+    platform: baremetal
+    network_path: onload
+    nic:
+      ports:
+        - { name: ens1f0, card: x2522-a, numa_node: 0 }
+    cpu: &cpu
+      client_cores: [4]
+      server_cores: [4]
+      irq_cores: [2]
+      require_isolated: true
+    tools: &tools
+      - name: sfnt-pingpong
+        params: { msg_sizes: [64, 256], duration_s: 10, spin: true }
+      - name: sockperf
+        params: { mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
+    repetitions: 5
+    tags: [bonding]
+
+  - id: bond-ab-same-card
+    description: Active-backup over two ports of one card
+    platform: baremetal
+    network_path: onload
+    nic:
+      bond_mode: active_backup
+      bond_name: bond0
+      ports:
+        - { name: ens1f0, card: x2522-a, numa_node: 0 }
+        - { name: ens1f1, card: x2522-a, numa_node: 0 }
+    cpu: *cpu
+    tools: *tools
+    repetitions: 5
+    tags: [bonding]
+
+  - id: bond-ab-dual-card
+    description: Active-backup across two cards (card-level redundancy)
+    platform: baremetal
+    network_path: onload
+    nic:
+      bond_mode: active_backup
+      bond_name: bond0
+      ports:
+        - { name: ens1f0, card: x2522-a, numa_node: 0 }
+        - { name: ens2f0, card: x2522-b, numa_node: 0 }
+    cpu: *cpu
+    tools: *tools
+    repetitions: 5
+    tags: [bonding]
+
+  - id: bond-lacp-dual-card
+    description: LACP 802.3ad across two cards
+    platform: baremetal
+    network_path: onload
+    nic:
+      bond_mode: lacp_8023ad
+      bond_name: bond0
+      ports:
+        - { name: ens1f0, card: x2522-a, numa_node: 0 }
+        - { name: ens2f0, card: x2522-b, numa_node: 0 }
+    cpu: *cpu
+    tools: *tools
+    repetitions: 5
+    tags: [bonding]

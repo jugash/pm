@@ -1,0 +1,18 @@
+{{- if .Values.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "perfbench.fullname" . }}-dashboards
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+    {{ .Values.dashboards.label }}: {{ .Values.dashboards.labelValue | quote }}
+  {{- if .Values.dashboards.folderAnnotation }}
+  annotations:
+    grafana_folder: {{ .Values.dashboards.folderAnnotation | quote }}
+  {{- end }}
+data:
+  perfbench-overview.json: |-
+{{ .Files.Get "dashboards/perfbench-overview.json" | indent 4 }}
+  perfbench-drilldown.json: |-
+{{ .Files.Get "dashboards/perfbench-drilldown.json" | indent 4 }}
+{{- end }}

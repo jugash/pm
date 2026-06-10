@@ -1,0 +1,84 @@
+# PerfBench Helm chart values.
+
+nameOverride: ""
+fullnameOverride: ""
+
+exporter:
+  image:
+    repository: ghcr.io/jugash/perfbench-exporter
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  port: 9109
+  replicas: 1
+  # Persist ingested run records across restarts (JSONL state file).
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClassName: ""   # empty = cluster default
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: "1", memory: 256Mi }
+  nodeSelector: {}
+  tolerations: []
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+serviceMonitor:
+  enabled: true
+  # Must match the label selector your Alloy / prometheus-operator instance
+  # uses to discover ServiceMonitors.
+  labels:
+    release: monitoring
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Grafana dashboards shipped as a ConfigMap; picked up by the Grafana sidecar
+# (grafana_dashboard: "1") or by Alloy remote-provisioning.
+dashboards:
+  enabled: true
+  label: grafana_dashboard
+  labelValue: "1"
+  folderAnnotation: ""
+
+# SR-IOV / Multus objects for the benchmark pods (kernel-bypass data path).
+sriov:
+  enabled: false
+  # Name registered by the SR-IOV device plugin; referenced in pod resources.
+  resourceName: sfc_vf
+  resourcePrefix: amd.com        # e.g. amd.com/sfc_vf (Solarflare/Xilinx)
+  # SriovNetworkNodePolicy (requires the sriov-network-operator).
+  nodePolicy:
+    enabled: true
+    nodeSelector:
+      feature.node.kubernetes.io/network-sriov.capable: "true"
+    numVfs: 8
+    nicSelector:
+      vendor: "1924"             # Solarflare PCI vendor id
+      pfNames: ["ens1f0", "ens2f0"]
+    deviceType: netdevice        # VFs as kernel netdevs (required for Onload)
+    isRdma: false
+
+# Multus NetworkAttachmentDefinition for the benchmark data path.
+nad:
+  enabled: false
+  name: sriov-trading
+  # static or whereabouts-based IPAM for the benchmark subnet
+  ipam: |-
+    {
+      "type": "whereabouts",
+      "range": "192.168.100.0/24"
+    }
+  vlan: 0
+
+# Benchmark pod defaults (used by `perfbench run --transport k8s` workflows;
+# pods themselves are created by the harness, not the chart).
+bench:
+  image:
+    repository: ghcr.io/jugash/perfbench-bench
+    tag: "0.1.0"
+  hugepages2Mi: 1Gi
+
+rbac:
+  create: true

@@ -1,0 +1,30 @@
+# PerfBench benchmark pod image: the open-source tools the harness drives.
+#
+# Onload userland: for kernel-bypass scenarios the container needs the Onload
+# userland matching the host's kernel module. Build with
+#   --build-arg ONLOAD_VERSION=...
+# or mount it from the host; see docs/kubernetes.md.
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        iperf3 netperf sockperf rt-tests ethtool iproute2 \
+        build-essential git ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# sfnettest (sfnt-pingpong) and sysjitter are built from source.
+RUN git clone --depth 1 https://github.com/Xilinx-CNS/cns-sfnettest /tmp/sfnettest \
+    && make -C /tmp/sfnettest/src \
+    && install /tmp/sfnettest/src/sfnt-pingpong /usr/local/bin/ \
+    && rm -rf /tmp/sfnettest
+RUN git clone --depth 1 https://github.com/Xilinx-CNS/sysjitter /tmp/sysjitter \
+    && make -C /tmp/sysjitter \
+    && install /tmp/sysjitter/sysjitter /usr/local/bin/ \
+    && rm -rf /tmp/sysjitter
+
+# Onload userland (optional; uncomment and pin a release to bake it in)
+# ARG ONLOAD_VERSION=8.1.3.40
+# RUN wget -qO- https://github.com/Xilinx-CNS/onload/releases/download/v${ONLOAD_VERSION}/onload-${ONLOAD_VERSION}.tgz \
+#     | tar xz -C /tmp && /tmp/onload-${ONLOAD_VERSION}/scripts/onload_install --userfiles
+
+CMD ["sleep", "infinity"]

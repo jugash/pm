@@ -1,0 +1,21 @@
+{{- if and .Values.sriov.enabled .Values.sriov.nodePolicy.enabled }}
+# Requires the sriov-network-operator to be installed in the cluster.
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovNetworkNodePolicy
+metadata:
+  name: {{ include "perfbench.fullname" . }}-sfc
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+spec:
+  resourceName: {{ .Values.sriov.resourceName }}
+  nodeSelector:
+    {{- toYaml .Values.sriov.nodePolicy.nodeSelector | nindent 4 }}
+  numVfs: {{ .Values.sriov.nodePolicy.numVfs }}
+  nicSelector:
+    vendor: {{ .Values.sriov.nodePolicy.nicSelector.vendor | quote }}
+    pfNames:
+      {{- toYaml .Values.sriov.nodePolicy.nicSelector.pfNames | nindent 6 }}
+  deviceType: {{ .Values.sriov.nodePolicy.deviceType }}
+  isRdma: {{ .Values.sriov.nodePolicy.isRdma }}
+{{- end }}

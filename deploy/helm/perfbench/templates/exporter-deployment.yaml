@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "perfbench.fullname" . }}-exporter
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: exporter
+spec:
+  replicas: {{ .Values.exporter.replicas }}
+  selector:
+    matchLabels:
+      {{- include "perfbench.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "perfbench.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.rbac.create }}
+      serviceAccountName: {{ include "perfbench.fullname" . }}
+      {{- end }}
+      containers:
+        - name: exporter
+          image: "{{ .Values.exporter.image.repository }}:{{ .Values.exporter.image.tag }}"
+          imagePullPolicy: {{ .Values.exporter.image.pullPolicy }}
+          command:
+            - perfbench
+            - exporter
+            - --host=0.0.0.0
+            - --port={{ .Values.exporter.port }}
+            {{- if .Values.exporter.persistence.enabled }}
+            - --state-file=/var/lib/perfbench/state.jsonl
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.exporter.port }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.exporter.resources | nindent 12 }}
+          {{- if .Values.exporter.persistence.enabled }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/perfbench
+          {{- end }}
+      {{- with .Values.exporter.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.exporter.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.exporter.persistence.enabled }}
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ include "perfbench.fullname" . }}-state
+      {{- end }}
+---
+{{- if .Values.exporter.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "perfbench.fullname" . }}-state
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.exporter.persistence.size }}
+  {{- if .Values.exporter.persistence.storageClassName }}
+  storageClassName: {{ .Values.exporter.persistence.storageClassName }}
+  {{- end }}
+{{- end }}
+---
+{{- if .Values.rbac.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "perfbench.fullname" . }}
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+{{- end }}

@@ -1,0 +1,26 @@
+{{- if .Values.nad.enabled }}
+# Multus secondary network for the benchmark data path. The
+# k8s.v1.cni.cncf.io/resourceName annotation ties this NAD to the SR-IOV
+# device-plugin resource, so a pod requesting both gets a VF wired onto this
+# network.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ .Values.nad.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: {{ printf "%s/%s" .Values.sriov.resourcePrefix .Values.sriov.resourceName }}
+spec:
+  config: |-
+    {
+      "cniVersion": "0.3.1",
+      "type": "sriov",
+      "name": {{ .Values.nad.name | quote }},
+      {{- if gt (int .Values.nad.vlan) 0 }}
+      "vlan": {{ .Values.nad.vlan }},
+      {{- end }}
+      "ipam": {{ .Values.nad.ipam | nindent 8 }}
+    }
+{{- end }}
