@@ -184,11 +184,23 @@ def preflight(path, ids, role, transport, client_host, server_host, ssh_user, ss
     """Run preflight checks only; exits non-zero on fatal failures."""
     host = client_host if role == "client" else server_host
     pod = client_pod if role == "client" else server_pod
+    from perfbench.capture.resolve import resolve_nic
+
     executor = _build_executor(transport, host, ssh_user, ssh_key, namespace, pod)
     any_fatal = False
     for sc in _select(load_scenarios(path), ids):
-        results = run_preflight(executor, sc, role=role)
         click.echo(f"# {sc.id} ({role} on {executor.describe()})")
+        if not sc.nic.resolved:
+            try:
+                sc = resolve_nic(executor, sc)
+            except PerfBenchError as exc:
+                click.echo(f"  [FATAL] nic_resolution: {exc}")
+                any_fatal = True
+                continue
+            click.echo(
+                f"  [PASS ] nic_resolution: {[p.name for p in sc.nic.ports]}"
+            )
+        results = run_preflight(executor, sc, role=role)
         for r in results:
             mark = "PASS" if r.passed else ("FATAL" if r.severity == "fatal" else "WARN")
             click.echo(f"  [{mark:5}] {r.name}: {r.message}")

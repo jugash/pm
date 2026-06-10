@@ -192,6 +192,12 @@ def check_thp(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
 
 def check_nic_driver(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
     iface = scenario.nic.ports[0].name
+    if not iface:
+        return CheckResult(
+            "nic_driver", False, SEV_FATAL,
+            "port has no interface name — NIC resolution did not run "
+            "(resolve_nic must be applied before preflight)",
+        )
     result = executor.run(f"ethtool -i {iface}", timeout=10)
     if not result.ok:
         return CheckResult(
@@ -232,7 +238,10 @@ def check_nic_identity(executor: Executor, scenario: Scenario, role: str) -> Che
 
     problems: list[str] = []
     seen: list[str] = []
-    for port in scenario.nic.ports:
+    for i, port in enumerate(scenario.nic.ports):
+        if not port.name:
+            problems.append(f"ports[{i}]: no interface name (NIC resolution did not run)")
+            continue
         vendor_result = executor.run(
             f"cat /sys/class/net/{port.name}/device/vendor", timeout=10
         )

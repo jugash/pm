@@ -224,6 +224,19 @@ class TestPreflight(unittest.TestCase):
         self.assertFalse(check.passed)
         self.assertIn("no such interface", check.message)
 
+    def test_unresolved_ports_fail_clearly_not_with_none(self):
+        # preflight on an unresolved scenario must not run `ethtool -i None`
+        scenario = make_scenario(nic={"vendor": "0x1924", "ports": [{"card": "x2"}]})
+        executor = FakeExecutor(responses=dict(GOOD_HOST))
+        results = run_preflight(executor, scenario)
+        failing = {r.name for r in fatal_failures(results)}
+        self.assertIn("nic_driver", failing)
+        self.assertIn("nic_identity", failing)
+        messages = " ".join(r.message for r in results)
+        self.assertIn("resolution did not run", messages)
+        self.assertFalse(any("None" in c for c in executor.calls),
+                         f"command used literal None: {executor.calls}")
+
     def test_onload_missing_fatal_for_bypass_only(self):
         responses = dict(GOOD_HOST)
         responses["onload --version"] = _fail("not found", 127)

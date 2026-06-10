@@ -303,6 +303,19 @@ class TestK8sRunCommand(CliTestCase):
 
 
 class TestPreflightCommand(CliTestCase):
+    def test_preflight_resolves_unresolved_nic_first(self):
+        # name-free port with a vendor that won't exist locally: the command
+        # must report a clean nic_resolution failure, never `ethtool -i None`
+        doc = _scenario_doc(id="pf-auto", cpu={
+            "client_cores": [0], "server_cores": [0], "require_isolated": False})
+        doc["nic"] = {"vendor": "0x9999", "ports": [{"card": "x2"}]}
+        f = self.dir / "pfa.yaml"
+        f.write_text(yaml.safe_dump({"scenarios": [doc]}))
+        result = self.runner.invoke(main, ["preflight", str(f), "-s", "pf-auto"])
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("nic_resolution", result.output)
+        self.assertNotIn("-i None", result.output)
+
     def test_preflight_local_fails_fatally(self):
         # local sandbox: cores not isolated, ethtool missing -> fatal -> exit 1
         doc = _scenario_doc(id="pf", cpu={
