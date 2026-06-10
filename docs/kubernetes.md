@@ -1,27 +1,44 @@
-# Kubernetes: low-latency benchmark pods
+# OpenShift / Kubernetes: in-cluster benchmarking
 
 The k8s scenarios answer: *how close does a correctly configured pod get to
 bare metal?* For that to be a fair fight, the pod must receive the same
-substrate — a VF on the same NIC, exclusive isolated cores, hugepages, and
-the Onload userland.
+substrate — an SR-IOV VF on the same NIC, exclusive isolated cores,
+hugepages, and the Onload userland. This page targets OpenShift Container
+Platform (OCP); plain-Kubernetes differences are noted inline.
 
-## Prerequisites
+## Node prerequisites (OCP)
 
-- Multus CNI installed (secondary networks).
-- sriov-network-operator (or sriov-cni + sriov-network-device-plugin
-  configured by hand).
-- kubelet on the benchmark nodes:
-  `--cpu-manager-policy=static --reserved-cpus=0-1`
-  (+ `--topology-manager-policy=single-numa-node` strongly recommended), and
-  kernel-level isolation per [host-tuning](host-tuning.md) — kubelet static
-  pinning assigns exclusive cores, but only kernel `isolcpus`/`nohz_full`
-  keeps the rest of the OS off them.
-- Onload kernel module + sfc driver installed on the node; the pod needs
-  `/dev/onload` and `/dev/sfc_char` (the harness's pod renderer mounts them
-  for bypass scenarios) and an Onload userland matching the module version
-  (bake into the bench image or mount from the host).
+- **PerformanceProfile** (Node Tuning Operator) on the benchmark
+  MachineConfigPool — this is the OCP-native way to get everything
+  [host-tuning.md](host-tuning.md) requires: `isolated`/`reserved` CPU sets
+  (becomes `isolcpus`/`nohz_full`/`rcu_nocbs`), hugepages, static CPU
+  manager, `single-numa-node` topology policy, and the low-latency tuned
+  profile, all in one CR:
 
-## Deploy with the Helm chart
+  ```yaml
+  apiVersion: performance.openshift.io/v2
+  kind: PerformanceProfile
+  metadata: { name: trading-latency }
+  spec:
+    cpu: { isolated: "2-15", reserved: "0-1" }
+    hugepages:
+      defaultHugepagesSize: 2M
+      pages: [{ size: 2M, count: 1024 }]
+    numa: { topologyPolicy: single-numa-node }
+    realTimeKernel: { enabled: false }
+    nodeSelector: { node-role.kubernetes.io/worker-latency: "" }
+  ```
+
+  (Plain k8s: set kubelet `--cpu-manager-policy=static
+  --topology-manager-policy=single-numa-node` and kernel args by hand.)
+- **SR-IOV Network Operator** (supported OCP operator; Multus is built into
+  OCP) — the chart's `SriovNetworkNodePolicy` carves VFs from the Solarflare
+  PFs with `deviceType: netdevice` (Onload needs kernel netdev VFs).
+- **Onload kernel module + sfc driver** on the nodes (KMM / kmods-via-
+  containers on OCP), and an Onload userland in the bench image matching the
+  module version.
+
+## Install the chart
 
 ```bash
 helm install perfbench deploy/helm/perfbench -n perfbench --create-namespace \
@@ -31,63 +48,96 @@ helm install perfbench deploy/helm/perfbench -n perfbench --create-namespace \
   --set nad.enabled=true --set nad.name=sriov-trading
 ```
 
-This installs:
+Installs:
 
-- the **results exporter** (Deployment + Service + ServiceMonitor + optional
-  PVC-backed state file) — Alloy discovers it via the ServiceMonitor labels;
-- a **SriovNetworkNodePolicy** carving VFs from the Solarflare PFs
-  (`deviceType: netdevice` — Onload needs kernel netdev VFs);
-- a **NetworkAttachmentDefinition** (`sriov-trading`) tied to the SR-IOV
-  resource, with whereabouts IPAM on the benchmark subnet;
-- the **Grafana dashboards** ConfigMap (sidecar label `grafana_dashboard: "1"`).
+- **results exporter** — Deployment + Service + ServiceMonitor + PVC state;
+- **SecurityContextConstraints** (`openshift.enabled=true`, default) —
+  grants the benchmark pods NET_RAW/NET_ADMIN/IPC_LOCK/SYS_NICE and the
+  hostPath mounts for `/dev/onload`/`/dev/sfc_char`. Cluster-admin required;
+  on plain k8s set `openshift.enabled=false` (PSS: the namespace needs the
+  `privileged` pod-security level instead);
+- **RBAC** — a namespace Role letting the runner create/exec/delete pods;
+- **SriovNetworkNodePolicy + NetworkAttachmentDefinition** (when enabled);
+- **Grafana dashboards** ConfigMap.
 
-## Benchmark pods
+All images are UBI 9 based (`deploy/docker/`): `Dockerfile.exporter`,
+`Dockerfile.runner` (harness + `oc`/`kubectl`), `Dockerfile.bench` (the
+benchmark tools; see in-file notes about entitled vs source builds).
 
-The harness renders pods itself (`perfbench.runner.k8s.render_benchmark_pod`):
-Guaranteed QoS (requests == limits, integral CPUs sized from the scenario's
-role cores → exclusive cores from the static CPU manager), hugepages,
-`k8s.v1.cni.cncf.io/networks: sriov-trading` annotation, NET_RAW/NET_ADMIN/
-IPC_LOCK/SYS_NICE capabilities, Onload device mounts for bypass scenarios,
-and `nodeName` pinning so client and server land on the intended hosts.
+## Running benchmarks in-cluster (runner Job)
 
-Typical flow:
+Enable the runner and give it scenarios:
 
 ```bash
-# 1. create the pods (long-lived `sleep infinity` shells)
-python3 - <<'EOF'
-from perfbench.config.loader import load_scenarios
-from perfbench.runner.k8s import Kubectl, render_benchmark_pod
-sc = [s for s in load_scenarios("scenarios/") if s.id == "k8s-onload-net"][0]
-k = Kubectl(namespace="perfbench")
-for role, node in (("client", "worker-a"), ("server", "worker-b")):
-    k.apply(render_benchmark_pod(
-        name=f"bench-{role}", scenario=sc, role=role,
-        image="ghcr.io/jugash/perfbench-bench:0.1.0",
-        node=node, networks=["sriov-trading"],
-        sriov_resource="amd.com/sfc_vf"))
-    k.wait_ready(f"bench-{role}")
-print("server data-path IP:", k.pod_network_ip("bench-server", "sriov-trading"))
-EOF
+helm upgrade perfbench deploy/helm/perfbench -n perfbench --reuse-values \
+  --set runner.enabled=true \
+  --set runner.clientNode=worker-a --set runner.serverNode=worker-b \
+  --set runner.scenarioIds='{k8s-onload-net}' \
+  --set-file runner.scenarios=scenarios/k8s-vs-baremetal.yaml
 
-# 2. run the scenario against the pods (one shared measurement pipeline)
-perfbench run scenarios/ -s k8s-onload-net \
-    --transport k8s --namespace perfbench \
-    --client-pod bench-client --server-pod bench-server \
-    --server-address <data-path IP from step 1> \
-    --push http://perfbench-exporter.perfbench:9109
+oc -n perfbench logs -f job/perfbench-runner-2
 ```
 
-Use the **secondary-network IP** as `--server-address`, never the cluster
-pod IP — otherwise you benchmark the CNI overlay instead of the VF.
+Each upgrade with `runner.enabled=true` creates a fresh revision-suffixed
+Job. The Job runs `perfbench k8s-run`, which is fully self-contained:
 
-## Checklist for a fair comparison
+1. renders Guaranteed-QoS client/server pods (exclusive CPUs sized from the
+   scenario's role cores, hugepages, Multus annotation, SR-IOV resource,
+   Onload device mounts for bypass scenarios), pinned to
+   `runner.clientNode`/`serverNode`;
+2. applies them, waits for Ready, resolves the **data-path address** from
+   the Multus `network-status` annotation (never the cluster pod IP — that
+   would benchmark the CNI overlay);
+3. runs preflight + env capture + tools through the same orchestrator as
+   bare metal, pushing each rep to the exporter;
+4. deletes the pods (cleanup is by-name and runs even after partial
+   provisioning; `runner.keepPods=true` to debug).
 
-- Same physical NIC port (or its VF) as the bare-metal scenario.
-- Pod cores ⊂ node isolated cores, same NUMA node as the NIC; verify in the
-  run's env snapshot (it is taken *inside* the pod, so `isolated_cpus`,
-  governor etc. reflect what the workload actually sees).
-- Same Onload version in-image as the node's kernel module (env snapshot
-  shows both sides).
-- irqbalance disabled on the node; preflight runs inside the pod and will
-  catch most of this.
-- `perfbench preflight --transport k8s --client-pod bench-client …` first.
+The same command works from a laptop/bastion with `oc` configured:
+
+```bash
+perfbench k8s-run scenarios/ -s k8s-onload-net \
+  --namespace perfbench --image ghcr.io/jugash/perfbench-bench:0.1.0 \
+  --client-node worker-a --server-node worker-b \
+  --network sriov-trading --sriov-resource amd.com/sfc_vf \
+  --push http://perfbench-exporter.perfbench:9109
+```
+
+## How preflight works inside pods
+
+Preflight runs **inside the benchmark pods** via `oc exec`, which has an
+important property: sysfs is the *node's* sysfs, mounted read-only into the
+pod. So these checks genuinely verify the node the pod landed on:
+
+| check | what it sees from a pod |
+|---|---|
+| `cpu_isolation` | node truth (`/sys/devices/system/cpu/isolated`) — verifies the PerformanceProfile actually isolated your scenario cores |
+| `cpu_governor`, `smt`, `transparent_hugepages` | node truth (host sysfs) |
+| `nic_driver` | the VF inside the pod (`ethtool -i net1`) — verifies you got a real sfc VF, not a veth |
+| `onload` | the pod image — verifies the userland is present |
+| `irqbalance` | **cannot see host processes** (PID namespace) |
+
+The irqbalance blind spot is handled honestly: the check detects it's inside
+a container (pid 1 isn't systemd/init) and reports a *warning* — "cannot
+verify from container, check the node" — instead of a vacuous pass. On OCP,
+the PerformanceProfile disables irqbalance on isolated cores for you; verify
+once per node with
+`oc debug node/worker-a -- chroot /host pgrep -x irqbalance`.
+
+Note also: the scenario's `cpu.client_cores` are used for `taskset` inside
+the pod and for the isolation check; with the static CPU manager the pod is
+*allocated* exclusive cores by kubelet, so set the scenario cores to match
+the cpuset the pod actually receives (`oc exec … -- cat
+/sys/fs/cgroup/cpuset.cpus.effective`) or run with `require_isolated: false`
+and rely on the env snapshot.
+
+## Checklist for a fair bare-metal comparison
+
+- Same physical NIC port (VF) as the bare-metal scenario, same NUMA node.
+- Pod cores within the node's isolated set; verified by preflight/env
+  snapshot taken inside the pod.
+- Same Onload version in-image as the node's module (both appear in the env
+  snapshot).
+- `--network`/data-path address used, not the cluster IP.
+- `perfbench preflight --transport k8s --client-pod …` (or just read the
+  preflight section of the run record) before trusting numbers.

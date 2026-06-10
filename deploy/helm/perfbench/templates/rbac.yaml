@@ -1,0 +1,35 @@
+{{- if .Values.rbac.create }}
+# Namespace-scoped permissions for the in-cluster runner Job: it creates the
+# benchmark pods, waits on them, execs the tools, and deletes them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "perfbench.fullname" . }}-runner
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "perfbench.fullname" . }}-runner
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "perfbench.fullname" . }}-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "perfbench.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

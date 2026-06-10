@@ -167,14 +167,7 @@ def run(path, ids, server_address, db, output_dir, skip_preflight, settle, push_
             click.echo(f"ERROR [{sc.id}]: {exc}", err=True)
             failed += 1
             continue
-        for record in records:
-            bad = [t.tool for t in record.tool_runs if not t.ok]
-            status = f"FAILED tools: {bad}" if bad else "ok"
-            click.echo(f"[{sc.id}] run {record.run_id} rep {record.rep}: {status}")
-            if bad:
-                failed += 1
-            if push_url:
-                push_run(push_url, record.to_dict())
+        failed += _report_records(records, sc.id, push_url)
     store.close()
     if failed:
         sys.exit(1)
@@ -240,6 +233,112 @@ def push_cmd(db, url, run_id):
         push_run(url, record.to_dict())
     click.echo(f"pushed {len(runs)} run(s) to {url}")
     store.close()
+
+
+def _make_kubectl(namespace, context, kubeconfig):
+    """Factory hook (patched in tests)."""
+    from perfbench.runner.k8s import Kubectl
+
+    return Kubectl(namespace=namespace, context=context, kubeconfig=kubeconfig)
+
+
+def _report_records(records, scenario_id, push_url):
+    failed = 0
+    for record in records:
+        bad = [t.tool for t in record.tool_runs if not t.ok]
+        status = f"FAILED tools: {bad}" if bad else "ok"
+        click.echo(f"[{scenario_id}] run {record.run_id} rep {record.rep}: {status}")
+        if bad:
+            failed += 1
+        if push_url:
+            push_run(push_url, record.to_dict())
+    return failed
+
+
+@main.command(name="k8s-run")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--scenario", "-s", "ids", multiple=True)
+@click.option("--namespace", default="perfbench", show_default=True)
+@click.option("--context", default=None)
+@click.option("--kubeconfig", default=None, type=click.Path())
+@click.option("--image", required=True, help="Benchmark pod image.")
+@click.option("--client-node", default=None, help="Pin the client pod to a node.")
+@click.option("--server-node", default=None, help="Pin the server pod to a node.")
+@click.option("--network", "networks", multiple=True,
+              help="Multus network(s); the first provides the data-path address.")
+@click.option("--sriov-resource", default=None, help="e.g. amd.com/sfc_vf")
+@click.option("--db", default="results/perfbench.sqlite", show_default=True)
+@click.option("--output-dir", default="results/raw", show_default=True)
+@click.option("--skip-preflight", is_flag=True)
+@click.option("--settle", default=1.0, show_default=True)
+@click.option("--push", "push_url", default=None)
+@click.option("--keep-pods", is_flag=True, help="Leave pods running for debugging.")
+def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
+            server_node, networks, sriov_resource, db, output_dir,
+            skip_preflight, settle, push_url, keep_pods):
+    """Provision benchmark pods, run k8s scenarios end-to-end, tear down.
+
+    Fully self-contained: renders Guaranteed-QoS pods (SR-IOV VF, hugepages,
+    Onload devices for bypass scenarios), waits for readiness, resolves the
+    data-path address from the Multus network-status annotation, runs the
+    scenario through the same orchestrator as bare metal, then deletes the
+    pods. This is the command the Helm runner Job executes in-cluster.
+    """
+    from perfbench.config.schema import Platform
+    from perfbench.runner.k8s import K8sBenchSession
+
+    selected = _select(load_scenarios(path), ids)
+    skipped = [s.id for s in selected if s.platform is not Platform.K8S]
+    scenarios_k8s = [s for s in selected if s.platform is Platform.K8S]
+    if skipped:
+        click.echo(f"skipping non-k8s scenario(s): {skipped}")
+    if not scenarios_k8s:
+        raise click.UsageError("no scenarios with platform: k8s selected")
+
+    kubectl = _make_kubectl(namespace, context, kubeconfig)
+    session = K8sBenchSession(
+        kubectl,
+        image=image,
+        networks=networks,
+        sriov_resource=sriov_resource,
+        client_node=client_node,
+        server_node=server_node,
+    )
+    Path(db).parent.mkdir(parents=True, exist_ok=True)
+    store = ResultStore(db)
+    failed = 0
+    for sc in scenarios_k8s:
+        try:
+            click.echo(f"[{sc.id}] provisioning pods in namespace {namespace}")
+            deployment = session.provision(sc)
+            click.echo(
+                f"[{sc.id}] client={deployment.client_pod} "
+                f"server={deployment.server_pod} address={deployment.server_address}"
+            )
+            client, server = session.executors(deployment)
+            orch = Orchestrator(
+                client=client,
+                server=server,
+                server_address=deployment.server_address,
+                store=store,
+                output_dir=Path(output_dir),
+                settle_s=settle,
+                on_event=click.echo,
+            )
+            records = orch.run_scenario(sc, skip_preflight=skip_preflight)
+            failed += _report_records(records, sc.id, push_url)
+        except PerfBenchError as exc:
+            click.echo(f"ERROR [{sc.id}]: {exc}", err=True)
+            failed += 1
+        finally:
+            if not keep_pods:
+                try:
+                    session.teardown_scenario(sc)  # by-name; safe after partial provision
+                except PerfBenchError as exc:  # cleanup is best-effort
+                    click.echo(f"WARNING [{sc.id}]: pod cleanup failed: {exc}", err=True)
+    store.close()
+    if failed:
+        sys.exit(1)
 
 
 @main.command()

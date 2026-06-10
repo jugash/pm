@@ -72,13 +72,48 @@ nad:
     }
   vlan: 0
 
-# Benchmark pod defaults (used by `perfbench run --transport k8s` workflows;
-# pods themselves are created by the harness, not the chart).
+# Benchmark pod image (the tools). Pods are created by the runner/harness.
 bench:
   image:
     repository: ghcr.io/jugash/perfbench-bench
     tag: "0.1.0"
   hugepages2Mi: 1Gi
 
+# In-cluster benchmark runner Job. Each `helm upgrade --set runner.enabled=true`
+# creates a new revision-suffixed Job that runs `perfbench k8s-run`: it
+# provisions client/server pods, runs the selected scenarios, pushes results
+# to the exporter, and cleans up.
+runner:
+  enabled: false
+  image:
+    repository: ghcr.io/jugash/perfbench-runner
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  # Scenario ids to run; empty = all platform:k8s scenarios in the file.
+  scenarioIds: []
+  clientNode: ""          # pin client pod to a node (recommended)
+  serverNode: ""          # pin server pod to a different node
+  networks: [sriov-trading]
+  sriovResource: amd.com/sfc_vf
+  skipPreflight: false
+  keepPods: false
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  # Scenario YAML mounted into the Job (required when enabled). Example:
+  # scenarios: |
+  #   scenarios:
+  #     - id: k8s-onload-net
+  #       platform: k8s
+  #       ...
+  scenarios: ""
+
 rbac:
   create: true
+
+# OpenShift Container Platform integration: SecurityContextConstraints
+# granting the benchmark pods their required capabilities and hostPath
+# device mounts. Requires cluster-admin to install.
+openshift:
+  enabled: true

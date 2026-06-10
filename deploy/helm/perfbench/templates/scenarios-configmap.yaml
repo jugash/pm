@@ -1,0 +1,11 @@
+{{- if .Values.runner.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "perfbench.fullname" . }}-scenarios
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+data:
+  scenarios.yaml: |-
+{{ required "runner.scenarios must contain the scenario YAML when runner.enabled=true" .Values.runner.scenarios | indent 4 }}
+{{- end }}

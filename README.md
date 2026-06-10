@@ -63,12 +63,25 @@ perfbench run ──> SQLite (full fidelity) ──push──> exporter /api/v1/
                                               Grafana dashboards
 ```
 
-Deploy the exporter + ServiceMonitor + dashboards with the Helm chart:
+Deploy the exporter + ServiceMonitor + SCC + dashboards with the Helm chart
+(OpenShift-focused; UBI 9 images), and run benchmarks **in-cluster** via the
+runner Job:
 
 ```bash
 helm install perfbench deploy/helm/perfbench -n perfbench --create-namespace \
     --set serviceMonitor.labels.release=monitoring \
     --set sriov.enabled=true --set nad.enabled=true
+
+# launch a benchmark Job (provisions pods, runs, pushes, cleans up)
+helm upgrade perfbench deploy/helm/perfbench -n perfbench --reuse-values \
+    --set runner.enabled=true \
+    --set runner.clientNode=worker-a --set runner.serverNode=worker-b \
+    --set-file runner.scenarios=scenarios/k8s-vs-baremetal.yaml
+
+# or directly from a bastion with oc configured:
+perfbench k8s-run scenarios/ -s k8s-onload-net --namespace perfbench \
+    --image ghcr.io/jugash/perfbench-bench:0.1.0 \
+    --client-node worker-a --server-node worker-b --network sriov-trading
 ```
 
 ## Testing
@@ -88,7 +101,7 @@ make pytest   # same suite under pytest-cov (dev extras)
 - [docs/scenarios.md](docs/scenarios.md) — scenario/matrix schema reference
 - [docs/tools.md](docs/tools.md) — tool adapters, parsed output, caveats
 - [docs/host-tuning.md](docs/host-tuning.md) — host prep for valid numbers
-- [docs/kubernetes.md](docs/kubernetes.md) — Multus/SR-IOV/CPU-Manager setup
+- [docs/kubernetes.md](docs/kubernetes.md) — OpenShift/Multus/SR-IOV setup, in-cluster runner, preflight-in-pods
 - [docs/metrics.md](docs/metrics.md) — exporter, metric names, PromQL recipes
 - [docs/runbook.md](docs/runbook.md) — step-by-step campaign runbook
 

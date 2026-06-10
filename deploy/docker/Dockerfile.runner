@@ -1,0 +1,17 @@
+# PerfBench in-cluster runner image (UBI 9, OpenShift-ready): harness CLI +
+# the OpenShift client (oc provides kubectl).
+FROM registry.access.redhat.com/ubi9/python-312:latest
+
+USER 0
+ARG OC_VERSION=stable
+RUN curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" \
+      | tar xz -C /usr/local/bin oc kubectl \
+    && chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
+
+WORKDIR /opt/perfbench
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir .
+
+USER 1001
+ENTRYPOINT ["perfbench"]

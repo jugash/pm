@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
 import yaml
@@ -125,6 +126,94 @@ class PodExecutor(Executor):
 
     def start(self, command, env=None) -> BackgroundProcess:
         return self.kubectl.executor.start(self._exec_command(command, env))
+
+
+@dataclass
+class BenchDeployment:
+    """A provisioned client/server pod pair for one scenario."""
+
+    client_pod: str
+    server_pod: str
+    server_address: str
+
+
+class K8sBenchSession:
+    """Provisions benchmark pods for a scenario and exposes executors.
+
+    This is what makes ``perfbench k8s-run`` (and the Helm runner Job)
+    self-contained: render pods -> apply -> wait Ready -> resolve the
+    data-path address (secondary Multus network if configured, else pod IP)
+    -> run -> tear down.
+    """
+
+    def __init__(
+        self,
+        kubectl: Kubectl,
+        image: str,
+        networks: Sequence[str] = (),
+        sriov_resource: Optional[str] = None,
+        client_node: Optional[str] = None,
+        server_node: Optional[str] = None,
+        hugepages_2mi: str = "1Gi",
+        ready_timeout_s: int = 180,
+    ):
+        self.kubectl = kubectl
+        self.image = image
+        self.networks = tuple(networks)
+        self.sriov_resource = sriov_resource
+        self.nodes = {"client": client_node, "server": server_node}
+        self.hugepages_2mi = hugepages_2mi
+        self.ready_timeout_s = ready_timeout_s
+
+    def pod_name(self, scenario: Scenario, role: str) -> str:
+        # RFC 1123 label, 63 chars max
+        base = f"pb-{scenario.id}-{role}".replace("_", "-").replace(".", "-")
+        return base[:63].rstrip("-")
+
+    def provision(self, scenario: Scenario) -> BenchDeployment:
+        for role in ("server", "client"):
+            manifest = render_benchmark_pod(
+                name=self.pod_name(scenario, role),
+                scenario=scenario,
+                role=role,
+                image=self.image,
+                node=self.nodes[role],
+                networks=self.networks,
+                sriov_resource=self.sriov_resource,
+                hugepages_2mi=self.hugepages_2mi,
+                namespace=self.kubectl.namespace,
+            )
+            self.kubectl.apply(manifest)
+        for role in ("server", "client"):
+            self.kubectl.wait_ready(self.pod_name(scenario, role), self.ready_timeout_s)
+
+        server_pod = self.pod_name(scenario, "server")
+        if self.networks:
+            address = self.kubectl.pod_network_ip(server_pod, self.networks[0])
+        else:
+            address = self.kubectl.pod_ip(server_pod)
+        return BenchDeployment(
+            client_pod=self.pod_name(scenario, "client"),
+            server_pod=server_pod,
+            server_address=address,
+        )
+
+    def executors(self, deployment: BenchDeployment) -> tuple[Executor, Executor]:
+        """(client, server) executors for the orchestrator."""
+        return (
+            PodExecutor(self.kubectl, deployment.client_pod),
+            PodExecutor(self.kubectl, deployment.server_pod),
+        )
+
+    def teardown(self, deployment: BenchDeployment) -> None:
+        self.kubectl.delete_pod(deployment.client_pod)
+        self.kubectl.delete_pod(deployment.server_pod)
+
+    def teardown_scenario(self, scenario: Scenario) -> None:
+        """Best-effort cleanup by name — safe even if provisioning failed
+        halfway (delete uses --ignore-not-found)."""
+        for role in ("client", "server"):
+            self.kubectl.delete_pod(self.pod_name(scenario, role))
 
 
 def render_benchmark_pod(

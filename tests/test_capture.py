@@ -21,6 +21,7 @@ def _fail(stderr: str = "", code: int = 1) -> ExecResult:
 
 GOOD_HOST = {
     "pgrep -x irqbalance": _fail(),  # not running -> good
+    "/proc/1/comm": _ok("systemd"),  # real host, pid namespace visible
     "isolated": _ok("2,4,6"),
     "scaling_governor": _ok("performance"),
     "smt/control": _ok("off"),
@@ -56,6 +57,15 @@ class TestPreflight(unittest.TestCase):
         results = run_preflight(FakeExecutor(responses=responses), make_scenario())
         fatals = fatal_failures(results)
         self.assertEqual([f.name for f in fatals], ["irqbalance"])
+
+    def test_irqbalance_unverifiable_in_container(self):
+        responses = dict(GOOD_HOST)
+        responses["/proc/1/comm"] = _ok("sleep")  # pod pid 1
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        self.assertEqual(fatal_failures(results), [])  # warning, not fatal
+        irq = [r for r in results if r.name == "irqbalance"][0]
+        self.assertFalse(irq.passed)
+        self.assertIn("cannot verify from container", irq.message)
 
     def test_missing_isolation_is_fatal(self):
         responses = dict(GOOD_HOST)

@@ -82,6 +82,62 @@ class TestPodExecutor(unittest.TestCase):
             PodExecutor(k, "p").run("cat", input_data="x")
 
 
+class TestK8sBenchSession(unittest.TestCase):
+    def _session(self, networks=("sriov-trading",), responses=None):
+        from perfbench.runner.k8s import K8sBenchSession
+
+        base = {
+            "network-status": ExecResult(
+                "", 0,
+                stdout='[{"name": "perfbench/sriov-trading", "ips": ["192.168.100.7"]}]',
+            ),
+        }
+        base.update(responses or {})
+        kubectl, fake = _kubectl(responses=base)
+        session = K8sBenchSession(
+            kubectl,
+            image="bench:1",
+            networks=networks,
+            sriov_resource="amd.com/sfc_vf",
+            client_node="worker-a",
+            server_node="worker-b",
+        )
+        return session, fake
+
+    def test_pod_name_sanitized(self):
+        session, _ = self._session()
+        sc = make_scenario(id="bm.onload_x2")
+        self.assertEqual(session.pod_name(sc, "client"), "pb-bm-onload-x2-client")
+
+    def test_provision_applies_waits_and_resolves_address(self):
+        session, fake = self._session()
+        deployment = session.provision(make_scenario())
+        self.assertEqual(deployment.client_pod, "pb-bm-onload-test-client")
+        self.assertEqual(deployment.server_pod, "pb-bm-onload-test-server")
+        self.assertEqual(deployment.server_address, "192.168.100.7")
+        applies = [c for c in fake.calls if "apply -f -" in c]
+        waits = [c for c in fake.calls if "--for=condition=Ready" in c]
+        self.assertEqual(len(applies), 2)
+        self.assertEqual(len(waits), 2)
+
+    def test_provision_without_networks_uses_pod_ip(self):
+        session, _ = self._session(
+            networks=(), responses={"get pod": ExecResult("", 0, stdout="10.2.3.4")}
+        )
+        deployment = session.provision(make_scenario())
+        self.assertEqual(deployment.server_address, "10.2.3.4")
+
+    def test_executors_and_teardown(self):
+        session, fake = self._session()
+        deployment = session.provision(make_scenario())
+        client, server = session.executors(deployment)
+        self.assertIn("pb-bm-onload-test-client", client.describe())
+        self.assertIn("pb-bm-onload-test-server", server.describe())
+        session.teardown(deployment)
+        deletes = [c for c in fake.calls if "delete pod" in c]
+        self.assertEqual(len(deletes), 2)
+
+
 class TestRenderBenchmarkPod(unittest.TestCase):
     def test_onload_pod(self):
         text = render_benchmark_pod(

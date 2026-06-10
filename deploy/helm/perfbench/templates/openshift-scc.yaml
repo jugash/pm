@@ -1,0 +1,48 @@
+{{- if .Values.openshift.enabled }}
+# OpenShift SecurityContextConstraints for the benchmark pods: they need
+# NET_RAW/NET_ADMIN (raw sockets, interface config), IPC_LOCK (Onload shared
+# memory / hugepages), SYS_NICE (RT priorities for cyclictest), and hostPath
+# for /dev/onload + /dev/sfc_char in bypass scenarios.
+#
+# Cluster-scoped: installing this chart with openshift.enabled=true requires
+# cluster-admin (or pre-create the SCC and set openshift.enabled=false).
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ include "perfbench.fullname" . }}
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+allowPrivilegedContainer: false
+allowHostDirVolumePlugin: true     # /dev/onload, /dev/sfc_char
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowHostIPC: false
+allowedCapabilities:
+  - NET_RAW
+  - NET_ADMIN
+  - IPC_LOCK
+  - SYS_NICE
+defaultAddCapabilities: []
+requiredDropCapabilities: []
+readOnlyRootFilesystem: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+fsGroup:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - hostPath
+  - persistentVolumeClaim
+  - projected
+  - secret
+users:
+  - system:serviceaccount:{{ .Release.Namespace }}:{{ include "perfbench.fullname" . }}
+  - system:serviceaccount:{{ .Release.Namespace }}:default
+{{- end }}

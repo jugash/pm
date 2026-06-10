@@ -55,14 +55,27 @@ def parse_cpu_list(text: str) -> set[int]:
 
 def check_irqbalance(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
     result = executor.run("pgrep -x irqbalance", timeout=10)
-    running = result.exit_code == 0
+    if result.exit_code == 0:
+        return CheckResult(
+            name="irqbalance",
+            passed=False,
+            severity=SEV_FATAL,
+            message="irqbalance is running and will migrate IRQs onto benchmark cores",
+        )
+    # Not found — but inside a container the PID namespace hides host
+    # processes, so "not found" proves nothing. Detect that and downgrade to
+    # an honest warning instead of a vacuous pass.
+    pid1 = executor.run("cat /proc/1/comm", timeout=10).stdout.strip()
+    if pid1 and pid1 not in ("systemd", "init"):
+        return CheckResult(
+            name="irqbalance",
+            passed=False,
+            severity=SEV_WARNING,
+            message=f"cannot verify from container (pid1={pid1}); "
+            "check irqbalance on the node itself",
+        )
     return CheckResult(
-        name="irqbalance",
-        passed=not running,
-        severity=SEV_FATAL,
-        message="irqbalance is running and will migrate IRQs onto benchmark cores"
-        if running
-        else "irqbalance not running",
+        name="irqbalance", passed=True, severity=SEV_FATAL, message="irqbalance not running"
     )
 
 

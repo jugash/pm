@@ -200,6 +200,82 @@ class TestRunAndReport(CliTestCase):
         self.assertNotEqual(result.exit_code, 0)
 
 
+class TestK8sRunCommand(CliTestCase):
+    def setUp(self):
+        super().setUp()
+        from perfbench.runner.base import ExecResult, FakeExecutor
+
+        self.fake = FakeExecutor(
+            responses={
+                "network-status": ExecResult(
+                    "", 0,
+                    stdout='[{"name": "perfbench/sriov-net", "ips": ["192.168.100.9"]}]',
+                ),
+                "get pod": ExecResult("", 0, stdout="10.0.0.5"),
+                "latency=": ExecResult("", 0, stdout="latency=123 server=x"),
+            }
+        )
+        doc = _scenario_doc(id="k8s-echo", platform="k8s")
+        self.k8s_file = self.dir / "k8s.yaml"
+        self.k8s_file.write_text(yaml.safe_dump({"scenarios": [doc]}))
+
+    def _invoke(self, *extra):
+        import unittest.mock as mock
+        from perfbench.runner.k8s import Kubectl
+
+        def factory(namespace, context, kubeconfig):
+            return Kubectl(namespace=namespace, context=context,
+                           kubeconfig=kubeconfig, executor=self.fake)
+
+        with mock.patch("perfbench.cli._make_kubectl", side_effect=factory):
+            return self.runner.invoke(main, [
+                "k8s-run", str(self.k8s_file),
+                "--image", "bench:1",
+                "--db", str(self.dir / "k.sqlite"),
+                "--output-dir", str(self.dir / "kraw"),
+                "--skip-preflight", "--settle", "0",
+                *extra,
+            ])
+
+    def test_end_to_end_with_network(self):
+        result = self._invoke("--network", "sriov-net",
+                              "--client-node", "wa", "--server-node", "wb")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("address=192.168.100.9", result.output)
+        self.assertIn("rep 0: ok", result.output)
+        # pods applied, exec'd, deleted
+        self.assertTrue(any("apply -f -" in c for c in self.fake.calls))
+        self.assertTrue(any("exec pb-k8s-echo-client" in c for c in self.fake.calls))
+        self.assertEqual(len([c for c in self.fake.calls if "delete pod" in c]), 2)
+        # results persisted
+        store = ResultStore(self.dir / "k.sqlite")
+        self.assertEqual(len(store.list_runs()), 1)
+        store.close()
+
+    def test_keep_pods(self):
+        result = self._invoke("--keep-pods")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertFalse(any("delete pod" in c for c in self.fake.calls))
+
+    def test_non_k8s_scenarios_rejected(self):
+        import unittest.mock as mock
+
+        with mock.patch("perfbench.cli._make_kubectl"):
+            result = self.runner.invoke(main, [
+                "k8s-run", str(self.scenario_file), "--image", "bench:1",
+            ])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("no scenarios with platform: k8s", result.output)
+
+    def test_provision_failure_cleans_up_and_fails(self):
+        from perfbench.runner.base import ExecResult
+
+        self.fake.responses["--for=condition=Ready"] = ExecResult("", 1, stderr="timed out")
+        result = self._invoke()
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("ERROR", result.output)
+
+
 class TestPreflightCommand(CliTestCase):
     def test_preflight_local_fails_fatally(self):
         # local sandbox: cores not isolated, ethtool missing -> fatal -> exit 1

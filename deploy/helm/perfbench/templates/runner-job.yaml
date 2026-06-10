@@ -1,0 +1,67 @@
+{{- if .Values.runner.enabled }}
+# In-cluster benchmark runner. Each `helm upgrade` with runner.enabled=true
+# creates a fresh Job (revision-suffixed name). It runs `perfbench k8s-run`,
+# which provisions the client/server benchmark pods, execs the tools, pushes
+# results to the exporter, and tears the pods down.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "perfbench.fullname" . }}-runner-{{ .Release.Revision }}
+  labels:
+    {{- include "perfbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runner
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{ .Values.runner.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "perfbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: runner
+    spec:
+      serviceAccountName: {{ include "perfbench.fullname" . }}
+      restartPolicy: Never
+      containers:
+        - name: runner
+          image: "{{ .Values.runner.image.repository }}:{{ .Values.runner.image.tag }}"
+          imagePullPolicy: {{ .Values.runner.image.pullPolicy }}
+          args:
+            - k8s-run
+            - /etc/perfbench/scenarios.yaml
+            - --namespace={{ .Release.Namespace }}
+            - --image={{ .Values.bench.image.repository }}:{{ .Values.bench.image.tag }}
+            {{- range .Values.runner.scenarioIds }}
+            - -s={{ . }}
+            {{- end }}
+            {{- if .Values.runner.clientNode }}
+            - --client-node={{ .Values.runner.clientNode }}
+            {{- end }}
+            {{- if .Values.runner.serverNode }}
+            - --server-node={{ .Values.runner.serverNode }}
+            {{- end }}
+            {{- range .Values.runner.networks }}
+            - --network={{ . }}
+            {{- end }}
+            {{- if .Values.runner.sriovResource }}
+            - --sriov-resource={{ .Values.runner.sriovResource }}
+            {{- end }}
+            {{- if .Values.runner.skipPreflight }}
+            - --skip-preflight
+            {{- end }}
+            {{- if .Values.runner.keepPods }}
+            - --keep-pods
+            {{- end }}
+            - --db=/tmp/perfbench.sqlite
+            - --output-dir=/tmp/raw
+            - --push=http://{{ include "perfbench.fullname" . }}-exporter:{{ .Values.exporter.port }}
+          resources:
+            {{- toYaml .Values.runner.resources | nindent 12 }}
+          volumeMounts:
+            - name: scenarios
+              mountPath: /etc/perfbench
+              readOnly: true
+      volumes:
+        - name: scenarios
+          configMap:
+            name: {{ include "perfbench.fullname" . }}-scenarios
+{{- end }}
