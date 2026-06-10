@@ -23,6 +23,7 @@ from typing import Callable, Optional, Sequence
 
 from perfbench.capture.envsnapshot import collect_environment
 from perfbench.capture.preflight import fatal_failures, run_preflight
+from perfbench.capture.resolve import resolve_nic
 from perfbench.config.schema import Scenario
 from perfbench.errors import ParseError, PreflightError
 from perfbench.results.models import Measurement, RunRecord, ToolRun, new_run_id, utc_now_iso
@@ -56,14 +57,19 @@ class Orchestrator:
 
     # -- planning ----------------------------------------------------------
 
-    def plan(self, scenario: Scenario) -> list[ToolPlan]:
+    def plan(
+        self, scenario: Scenario, server_scenario: Optional[Scenario] = None
+    ) -> list[ToolPlan]:
+        """Resolve commands; client and server may carry differently-resolved
+        NIC names (interface names differ between machines)."""
+        server_scenario = server_scenario or scenario
         plans = []
         for spec in scenario.tools:
             adapter = create_tool(spec)
             plans.append(
                 ToolPlan(
                     adapter=adapter,
-                    server_command=adapter.server_command(scenario),
+                    server_command=adapter.server_command(server_scenario),
                     client_command=adapter.client_command(scenario, self.server_address),
                     timeout_s=adapter.timeout_s(),
                 )
@@ -80,13 +86,27 @@ class Orchestrator:
     ) -> list[RunRecord]:
         """``extra_preflight``: pre-computed check dicts (e.g. node-level
         checks from a k8s debug pod) recorded alongside in-target checks."""
+        # interface names are per-host facts: resolve them independently on
+        # each side before anything that uses them (preflight, env capture,
+        # command construction)
+        if not scenario.nic.resolved:
+            self.on_event(f"[{scenario.id}] resolving NIC names")
+            client_sc = resolve_nic(self.client, scenario)
+            server_sc = resolve_nic(self.server, scenario)
+            self.on_event(
+                f"[{scenario.id}] resolved client={[p.name for p in client_sc.nic.ports]} "
+                f"server={[p.name for p in server_sc.nic.ports]}"
+            )
+        else:
+            client_sc = server_sc = scenario
+
         preflight_results = list(extra_preflight or [])
         if skip_preflight:
             self.on_event(f"[{scenario.id}] preflight skipped")
         else:
             self.on_event(f"[{scenario.id}] running preflight")
-            client_checks = run_preflight(self.client, scenario, role="client")
-            server_checks = run_preflight(self.server, scenario, role="server")
+            client_checks = run_preflight(self.client, client_sc, role="client")
+            server_checks = run_preflight(self.server, server_sc, role="server")
             preflight_results += [
                 {"target": "client", **c.to_dict()} for c in client_checks
             ] + [{"target": "server", **c.to_dict()} for c in server_checks]
@@ -94,18 +114,20 @@ class Orchestrator:
             if fatals:
                 raise PreflightError(fatals)
 
-        interfaces = [p.name for p in scenario.nic.ports]
-        if scenario.nic.bond_name:
-            interfaces.append(scenario.nic.bond_name)
-        interfaces.extend(self.extra_env_interfaces)
+        def _interfaces(sc: Scenario) -> list[str]:
+            names = [p.name for p in sc.nic.ports if p.name]
+            if sc.nic.bond_name:
+                names.append(sc.nic.bond_name)
+            names.extend(self.extra_env_interfaces)
+            return names
 
         self.on_event(f"[{scenario.id}] capturing environment")
         env = {
-            "client": collect_environment(self.client, interfaces),
-            "server": collect_environment(self.server, interfaces),
+            "client": collect_environment(self.client, _interfaces(client_sc)),
+            "server": collect_environment(self.server, _interfaces(server_sc)),
         }
 
-        plans = self.plan(scenario)
+        plans = self.plan(client_sc, server_scenario=server_sc)
         records: list[RunRecord] = []
         for rep in range(scenario.repetitions):
             record = RunRecord(
@@ -121,7 +143,7 @@ class Orchestrator:
                     f"[{scenario.id}] rep {rep + 1}/{scenario.repetitions} "
                     f"tool {plan.adapter.name}"
                 )
-                record.tool_runs.append(self._run_tool(scenario, plan, record.run_id))
+                record.tool_runs.append(self._run_tool(client_sc, plan, record.run_id))
             record.finished_at = utc_now_iso()
             if self.store is not None:
                 self.store.save_run(record)

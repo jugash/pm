@@ -1,6 +1,11 @@
 # Bonding layout comparison: single port vs dual-port-same-card
 # (active-backup) vs dual-card (active-backup and LACP).
 #
+# Ports are name-free: resolved per host at run time by Solarflare vendor id
+# (two ports -> two distinct matches, name-sorted). The bond device itself
+# (`bond_name`) must exist on the hosts with the matching mode — bonds are
+# host configuration, not something the harness creates.
+#
 # Note: Onload accelerates bonded interfaces with mode-dependent
 # constraints; failover behaviour is a separate measurement (see
 # docs/methodology.md - failover testing is manual in cut one).
@@ -11,8 +16,9 @@ scenarios:
     platform: baremetal
     network_path: onload
     nic:
+      vendor: "0x1924"
       ports:
-        - { name: ens1f0, card: x2522-a, numa_node: 0 }
+        - { card: x2522-a, numa_node: 0 }
     cpu: &cpu
       client_cores: [4]
       server_cores: [4]
@@ -31,11 +37,12 @@ scenarios:
     platform: baremetal
     network_path: onload
     nic:
+      vendor: "0x1924"
       bond_mode: active_backup
       bond_name: bond0
       ports:
-        - { name: ens1f0, card: x2522-a, numa_node: 0 }
-        - { name: ens1f1, card: x2522-a, numa_node: 0 }
+        - { card: x2522-a, numa_node: 0 }
+        - { card: x2522-a, numa_node: 0 }
     cpu: *cpu
     tools: *tools
     repetitions: 5
@@ -46,11 +53,14 @@ scenarios:
     platform: baremetal
     network_path: onload
     nic:
+      vendor: "0x1924"
       bond_mode: active_backup
       bond_name: bond0
       ports:
-        - { name: ens1f0, card: x2522-a, numa_node: 0 }
-        - { name: ens2f0, card: x2522-b, numa_node: 0 }
+        # dual-card: pin exact slots so resolution can't pick two ports of
+        # the same card (adjust addresses per host pair, `perfbench nics`)
+        - { card: x2522-a, pci: "0000:3b:00.0", numa_node: 0 }
+        - { card: x2522-b, pci: "0000:5e:00.0", numa_node: 0 }
     cpu: *cpu
     tools: *tools
     repetitions: 5
@@ -61,11 +71,12 @@ scenarios:
     platform: baremetal
     network_path: onload
     nic:
+      vendor: "0x1924"
       bond_mode: lacp_8023ad
       bond_name: bond0
       ports:
-        - { name: ens1f0, card: x2522-a, numa_node: 0 }
-        - { name: ens2f0, card: x2522-b, numa_node: 0 }
+        - { card: x2522-a, pci: "0000:3b:00.0", numa_node: 0 }
+        - { card: x2522-b, pci: "0000:5e:00.0", numa_node: 0 }
     cpu: *cpu
     tools: *tools
     repetitions: 5

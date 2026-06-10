@@ -136,6 +136,32 @@ class TestRunScenario(unittest.TestCase):
         self.assertIsNone(records[0].tool_runs[0].server_command)
         self.assertFalse(any(c.startswith("START") for c in server.calls))
 
+    def test_unresolved_nic_resolved_per_host(self):
+        scenario = make_scenario(
+            nic={"vendor": "0x1924", "ports": [{"card": "x2522-a"}]}
+        )
+        responses = dict(GOOD_HOST)
+        responses["sockperf ping-pong"] = _ok(SOCKPERF_OUTPUT)
+        client = FakeExecutor(name="client", responses={
+            "/sys/class/net/*/device": _ok("eth-cl|0x1924|0x0b03|0000:3b:00.0|0\n"),
+            **responses,
+        })
+        server = FakeExecutor(name="server", responses={
+            # same slot as the fake host's readlink answer, different name
+            "/sys/class/net/*/device": _ok("eth-sv|0x1924|0x0b03|0000:3b:00.0|0\n"),
+            **responses,
+        })
+        events = []
+        records = _orchestrator(client, server, on_event=events.append).run_scenario(scenario)
+        # different names resolved per side
+        self.assertTrue(any("client=['eth-cl'] server=['eth-sv']" in e for e in events))
+        # measurements stamped with the client-side resolved name
+        m = records[0].tool_runs[0].measurements[0]
+        self.assertEqual(m.labels["interface"], "eth-cl")
+        # env capture used each side's own name
+        self.assertIn("eth-cl", records[0].env["client"]["interfaces"])
+        self.assertIn("eth-sv", records[0].env["server"]["interfaces"])
+
     def test_bond_interfaces_in_env_capture(self):
         scenario = make_scenario(
             nic={

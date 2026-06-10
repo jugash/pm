@@ -64,7 +64,17 @@ def check_nic_irq_affinity(executor: Executor, scenario: Scenario, role: str) ->
     problems: list[str] = []
     found_any = False
 
-    for port in scenario.nic.ports:
+    named_ports = [p for p in scenario.nic.ports if p.name]
+    if not named_ports:
+        return CheckResult(
+            name="nic_irq_affinity",
+            passed=False,
+            severity=SEV_WARNING,
+            message="ports are resolved at runtime (no names yet); "
+            "IRQ affinity not verified at node level",
+        )
+
+    for port in named_ports:
         result = executor.run(
             f"awk -F: '/{port.name}/ {{gsub(/ /, \"\", $1); print $1}}' /proc/interrupts",
             timeout=10,

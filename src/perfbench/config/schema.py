@@ -95,9 +95,15 @@ def _reject_unknown(data: Mapping[str, Any], known: set[str], path: str) -> None
 
 @dataclass(frozen=True)
 class NicPort:
-    """One physical NIC port participating in a scenario."""
+    """One physical NIC port participating in a scenario.
 
-    name: str  # OS interface name, e.g. ens1f0
+    ``name`` is optional: interface names differ per machine (ens1f0 vs
+    enp59s0f0), so ports may instead be declared by PCI address (exact slot)
+    or rely on vendor+NUMA matching — the harness resolves the real name on
+    each host at run time (see ``perfbench.capture.resolve``).
+    """
+
+    name: Optional[str] = None  # OS interface name; resolved at runtime if unset
     card: str = ""  # human label, e.g. "x2522-a"
     pci: str = ""  # PCI address, e.g. 0000:3b:00.0
     numa_node: Optional[int] = None
@@ -109,8 +115,11 @@ class NicPort:
         numa = data.get("numa_node")
         if numa is not None:
             numa = _expect_int(numa, f"{path}.numa_node", minimum=0)
+        name = data.get("name")
+        if name is not None:
+            name = _expect_str(name, f"{path}.name")
         return cls(
-            name=_expect_str(data.get("name"), f"{path}.name"),
+            name=name,
             card=str(data.get("card", "")),
             pci=str(data.get("pci", "")),
             numa_node=numa,
@@ -162,12 +171,23 @@ class NicLayout:
 
     @property
     def interface(self) -> str:
-        """The interface traffic actually flows over (bond device or port)."""
-        return self.bond_name if self.bond_name else self.ports[0].name
+        """The interface traffic actually flows over (bond device or port).
+
+        Returns a placeholder for unresolved ports; the orchestrator always
+        resolves names per host before building commands.
+        """
+        if self.bond_name:
+            return self.bond_name
+        return self.ports[0].name or "<resolved-at-runtime>"
+
+    @property
+    def resolved(self) -> bool:
+        return all(p.name for p in self.ports)
 
     def label(self) -> str:
+        first = self.ports[0].name or self.ports[0].pci or "auto"
         if self.bond_mode is BondMode.NONE:
-            return f"none:{self.ports[0].name}"
+            return f"none:{first}"
         return f"{self.bond_mode.value}:{self.bond_name}({len(self.ports)})"
 
 
@@ -320,6 +340,19 @@ class Scenario:
             )
         if network_path is NetworkPath.ONLOAD and onload is None:
             onload = OnloadTuning()
+
+        # name-free ports need something to resolve by: an exact PCI address,
+        # or a vendor to match (explicit, or the Solarflare default implied
+        # by a kernel-bypass network path)
+        effective_vendor = nic.vendor or (
+            "0x1924" if network_path is not NetworkPath.KERNEL else None
+        )
+        for i, port in enumerate(nic.ports):
+            if not port.name and not port.pci and not effective_vendor:
+                raise SchemaError(
+                    f"{path}.nic.ports[{i}]",
+                    "port needs a name, a pci address, or nic.vendor to resolve by",
+                )
 
         repetitions = _expect_int(data.get("repetitions", 3), f"{path}.repetitions", minimum=1)
         tags_raw = data.get("tags", [])

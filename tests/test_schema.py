@@ -128,13 +128,34 @@ class TestNicLayout(unittest.TestCase):
         with self.assertRaises(SchemaError):
             NicLayout.from_dict({"ports": []})
 
-    def test_port_requires_name(self):
-        with self.assertRaises(SchemaError):
-            NicLayout.from_dict({"ports": [{"card": "x2"}]})
+    def test_port_name_now_optional_at_layout_level(self):
+        # identity requirements are enforced at scenario level (vendor/pci);
+        # the layout itself accepts name-free ports
+        nic = NicLayout.from_dict({"ports": [{"card": "x2"}]})
+        self.assertIsNone(nic.ports[0].name)
 
     def test_negative_numa(self):
         with self.assertRaises(SchemaError):
             NicLayout.from_dict({"ports": [{"name": "e0", "numa_node": -1}]})
+
+    def test_port_name_optional_with_identity(self):
+        # bypass scenario: vendor implied -> name-free port ok
+        sc = make_scenario(nic={"ports": [{"card": "x2", "numa_node": 0}]})
+        self.assertIsNone(sc.nic.ports[0].name)
+        self.assertFalse(sc.nic.resolved)
+        self.assertEqual(sc.nic.interface, "<resolved-at-runtime>")
+        self.assertEqual(sc.nic.label(), "none:auto")
+
+    def test_kernel_nameless_port_needs_vendor_or_pci(self):
+        with self.assertRaises(SchemaError) as ctx:
+            kernel_scenario(nic={"ports": [{"card": "x2"}]})
+        self.assertIn("resolve by", str(ctx.exception))
+        # pci alone is enough
+        sc = kernel_scenario(nic={"ports": [{"pci": "0000:3b:00.0"}]})
+        self.assertFalse(sc.nic.resolved)
+        # explicit vendor is enough
+        sc = kernel_scenario(nic={"vendor": "0x8086", "ports": [{}]})
+        self.assertIsNone(sc.nic.ports[0].name)
 
     def test_vendor_normalized_and_validated(self):
         nic = NicLayout.from_dict({"ports": [{"name": "e0"}], "vendor": "0X1924"})

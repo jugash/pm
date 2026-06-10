@@ -1,9 +1,10 @@
 # Core comparison: kernel stack vs Onload kernel bypass on bare metal.
-# Expands to 4 scenarios: {kernel, onload} x {interrupt-mode, spinning isn't
-# varied here - see onload-tuning matrix below for that}.
 #
-# Adjust interface names, cores and NUMA nodes to your hosts. Client and
-# server cores are per-host (the roles run on different machines).
+# Note: ports carry no interface name. The harness resolves the real name on
+# each host at run time (Solarflare = PCI vendor 0x1924, NUMA-filtered), so
+# the same file works when the client calls the port ens1f0 and the server
+# calls it enp59s0f0. Pin an exact slot with `pci: "0000:3b:00.0"` instead,
+# or a literal `name:` if you prefer. Discover facts with `perfbench nics`.
 
 matrices:
   - id_template: "bm-{network_path}-pp"
@@ -12,9 +13,9 @@ matrices:
       platform: baremetal
       network_path: kernel        # overridden by axis
       nic:
-        vendor: "0x1924"          # Solarflare; preflight verifies by PCI id, not name
+        vendor: "0x1924"          # Solarflare; resolution + preflight key on this
         ports:
-          - { name: ens1f0, card: x2522-a, pci: "0000:3b:00.0", numa_node: 0 }
+          - { card: x2522-a, numa_node: 0 }
       cpu:
         client_cores: [4]
         server_cores: [4]
@@ -45,8 +46,9 @@ matrices:
         profile: latency
         env: { EF_POLL_USEC: "100000", EF_INT_DRIVEN: "0" }
       nic:
+        vendor: "0x1924"
         ports:
-          - { name: ens1f0, card: x2522-a, numa_node: 0 }
+          - { card: x2522-a, numa_node: 0 }
       cpu:
         client_cores: [4]
         server_cores: [4]

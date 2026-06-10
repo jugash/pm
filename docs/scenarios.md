@@ -18,10 +18,10 @@ scenarios:
       bond_name: bond0          # required when bonded
       vendor: "0x1924"          # expected PCI vendor id (0x1924 = Solarflare)
       ports:                    # >= 1; >= 2 when bonded
-        - name: ens1f0          # OS interface name on THIS host (use `perfbench nics`)
-          card: x2522-a         # free-text card label
-          pci: "0000:3b:00.0"   # PCI address; preflight verifies name<->slot binding
-          numa_node: 0
+        - card: x2522-a         # free-text card label
+          numa_node: 0          # NUMA filter for vendor-based resolution
+          # name: ens1f0        # optional: pin an explicit per-host name
+          # pci: "0000:3b:00.0" # optional: pin an exact slot
     cpu:
       client_cores: [4]         # cores for the client-side tool process
       server_cores: [4]         # cores on the server host
@@ -42,13 +42,24 @@ scenarios:
 ```
 
 **Don't trust interface names.** `ens1f0` on one machine is `enp59s0f0` on
-another, and predictable names can drift after BIOS/firmware changes.
-Preflight therefore verifies NIC identity by PCI facts, not name: the
-`nic_identity` check reads the interface's PCI vendor id from sysfs and
-compares it to `nic.vendor` (defaulting to Solarflare `0x1924` for
-onload/efvi scenarios, since bypass requires Solarflare silicon), and when
-`ports[].pci` is declared it also confirms the name still points at that
-slot. Discover the correct per-host values with:
+another, and predictable names can drift after BIOS/firmware changes. Two
+mechanisms deal with this:
+
+*Resolution* — port `name` is optional. Before a run, the harness resolves
+the real interface name **independently on each host** (client and server
+may legitimately differ): an exact match when `pci` is declared, otherwise
+the first unused interface whose PCI vendor matches `nic.vendor`
+(defaulting to Solarflare `0x1924` for onload/efvi scenarios), filtered by
+`numa_node` when set. Resolution is deterministic (name-sorted), enriches
+the run record with the discovered pci/numa facts, and fails loudly with
+the host's NIC inventory when nothing matches. A name-free port must be
+resolvable: it needs `pci`, or `nic.vendor`, or a bypass network path.
+
+*Verification* — whether named explicitly or resolved, preflight's
+`nic_identity` check confirms the interface's PCI vendor id matches and,
+when `pci` is declared, that the name still points at that slot.
+
+Inspect a host's inventory with:
 
 ```bash
 perfbench nics --transport ssh --client-host lhr-lab-01 --ssh-user jugash
@@ -61,8 +72,10 @@ ens1f1  sfc     0x1924  0x0b03  0000:3b:00.1  0          yes
 eno1    i40e    0x8086  0x37d2  0000:18:00.0  0
 ```
 
-Copy `name`, `pci` and `numa_node` from this output into the scenario file
-for each host pair.
+With vendor-based resolution you usually don't copy anything — the shipped
+examples are name-free and portable across host pairs. Copy `pci` when you
+must pin exact slots (e.g. dual-card bonds where two ports of one card must
+not be picked).
 
 Validation rules worth knowing:
 
