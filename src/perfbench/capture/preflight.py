@@ -157,6 +157,63 @@ def check_nic_driver(executor: Executor, scenario: Scenario, role: str) -> Check
     )
 
 
+SOLARFLARE_VENDOR = "0x1924"
+
+
+def check_nic_identity(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
+    """Verify the NIC by PCI identity, not interface name.
+
+    Interface names differ between machines (ens1f0 vs enp59s0f0) and can
+    drift across BIOS/firmware changes; this check confirms that the named
+    interface is actually the silicon the scenario thinks it is:
+
+    * PCI vendor id from ``/sys/class/net/<iface>/device/vendor`` must match
+      ``nic.vendor`` (defaults to Solarflare 0x1924 for bypass scenarios —
+      Onload/ef_vi require Solarflare silicon);
+    * when ``ports[].pci`` is declared, the interface's actual PCI address
+      (sysfs device symlink) must match — catching name drift where ens1f0
+      now points at a different slot.
+    """
+    expected_vendor = scenario.nic.vendor
+    if expected_vendor is None and scenario.network_path is not NetworkPath.KERNEL:
+        expected_vendor = SOLARFLARE_VENDOR
+
+    problems: list[str] = []
+    seen: list[str] = []
+    for port in scenario.nic.ports:
+        vendor_result = executor.run(
+            f"cat /sys/class/net/{port.name}/device/vendor", timeout=10
+        )
+        if not vendor_result.ok:
+            problems.append(f"{port.name}: cannot read PCI vendor (no such interface?)")
+            continue
+        vendor = vendor_result.stdout.strip().lower()
+        seen.append(f"{port.name}={vendor}")
+        if expected_vendor and vendor != expected_vendor:
+            problems.append(
+                f"{port.name}: PCI vendor {vendor}, expected {expected_vendor}"
+                + (" (Solarflare)" if expected_vendor == SOLARFLARE_VENDOR else "")
+            )
+        if port.pci:
+            pci_result = executor.run(
+                f"basename $(readlink -f /sys/class/net/{port.name}/device)", timeout=10
+            )
+            actual = pci_result.stdout.strip().lower()
+            if pci_result.ok and actual and actual != port.pci.lower():
+                problems.append(
+                    f"{port.name}: at PCI {actual}, scenario declares {port.pci} "
+                    "(interface name drift?)"
+                )
+    if problems:
+        return CheckResult("nic_identity", False, SEV_FATAL, "; ".join(problems)[:400])
+    return CheckResult(
+        name="nic_identity",
+        passed=True,
+        severity=SEV_FATAL,
+        message="PCI identity verified: " + ", ".join(seen),
+    )
+
+
 def check_onload(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
     if scenario.network_path is NetworkPath.KERNEL:
         return CheckResult("onload", True, SEV_WARNING, "not required (kernel path)")
@@ -178,6 +235,7 @@ ALL_CHECKS: tuple[Callable[..., CheckResult], ...] = (
     check_smt,
     check_thp,
     check_nic_driver,
+    check_nic_identity,
     check_onload,
 )
 

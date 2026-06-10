@@ -16,10 +16,11 @@ scenarios:
     nic:
       bond_mode: none           # none | active_backup | lacp_8023ad
       bond_name: bond0          # required when bonded
+      vendor: "0x1924"          # expected PCI vendor id (0x1924 = Solarflare)
       ports:                    # >= 1; >= 2 when bonded
-        - name: ens1f0          # OS interface name (required)
+        - name: ens1f0          # OS interface name on THIS host (use `perfbench nics`)
           card: x2522-a         # free-text card label
-          pci: "0000:3b:00.0"
+          pci: "0000:3b:00.0"   # PCI address; preflight verifies name<->slot binding
           numa_node: 0
     cpu:
       client_cores: [4]         # cores for the client-side tool process
@@ -39,6 +40,29 @@ scenarios:
     repetitions: 5              # >= 1, one RunRecord each
     tags: [core-comparison]
 ```
+
+**Don't trust interface names.** `ens1f0` on one machine is `enp59s0f0` on
+another, and predictable names can drift after BIOS/firmware changes.
+Preflight therefore verifies NIC identity by PCI facts, not name: the
+`nic_identity` check reads the interface's PCI vendor id from sysfs and
+compares it to `nic.vendor` (defaulting to Solarflare `0x1924` for
+onload/efvi scenarios, since bypass requires Solarflare silicon), and when
+`ports[].pci` is declared it also confirms the name still points at that
+slot. Discover the correct per-host values with:
+
+```bash
+perfbench nics --transport ssh --client-host lhr-lab-01 --ssh-user jugash
+
+# ssh:jugash@lhr-lab-01
+name    driver  vendor  device  pci           numa_node  solarflare
+------  ------  ------  ------  ------------  ---------  ----------
+ens1f0  sfc     0x1924  0x0b03  0000:3b:00.0  0          yes
+ens1f1  sfc     0x1924  0x0b03  0000:3b:00.1  0          yes
+eno1    i40e    0x8086  0x37d2  0000:18:00.0  0
+```
+
+Copy `name`, `pci` and `numa_node` from this output into the scenario file
+for each host pair.
 
 Validation rules worth knowing:
 

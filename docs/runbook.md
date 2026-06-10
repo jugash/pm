@@ -13,8 +13,16 @@ release", "decide bond layout", "validate the k8s platform").
    `curl http://exporter:9109/healthz`, then check
    `perfbench_run_timestamp_seconds` exists in Grafana Explore after the
    first push.
-4. Copy `scenarios/*.yaml`, replace interface names / cores / NUMA nodes with
-   your hosts' reality. `perfbench validate scenarios/`.
+4. Discover each host's NIC facts and write them into the scenarios —
+   interface names differ per machine, so don't guess:
+
+   ```bash
+   perfbench nics --transport ssh --client-host trader-a --ssh-user bench
+   ```
+
+   Copy `name`, `pci`, `numa_node` per host into `scenarios/*.yaml` (and set
+   `nic.vendor: "0x1924"` so preflight pins the ports to Solarflare
+   silicon). Then `perfbench validate scenarios/`.
 
 ## 1. Qualify the substrate (per host pair, per reboot)
 

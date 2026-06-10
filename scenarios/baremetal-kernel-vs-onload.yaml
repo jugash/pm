@@ -12,6 +12,7 @@ matrices:
       platform: baremetal
       network_path: kernel        # overridden by axis
       nic:
+        vendor: "0x1924"          # Solarflare; preflight verifies by PCI id, not name
         ports:
           - { name: ens1f0, card: x2522-a, pci: "0000:3b:00.0", numa_node: 0 }
       cpu:

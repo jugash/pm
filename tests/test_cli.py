@@ -315,6 +315,18 @@ class TestPreflightCommand(CliTestCase):
         self.assertIn("PASS", result.output)
 
 
+class TestNicsCommand(CliTestCase):
+    def test_local_discovery_runs(self):
+        # sandbox may expose no PCI NICs; command must still succeed
+        result = self.runner.invoke(main, ["nics", "--transport", "local"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("# local", result.output)
+
+    def test_requires_host_for_ssh(self):
+        result = self.runner.invoke(main, ["nics", "--transport", "ssh"])
+        self.assertNotEqual(result.exit_code, 0)
+
+
 class TestPushCommand(CliTestCase):
     def test_push_all_and_single(self):
         result, db = TestRunAndReport._run(self, )  # reuse run helper

@@ -119,16 +119,32 @@ class NicPort:
 
 @dataclass(frozen=True)
 class NicLayout:
-    """NIC/bonding layout under test."""
+    """NIC/bonding layout under test.
+
+    ``vendor`` is the expected PCI vendor id (e.g. "0x1924" = Solarflare).
+    Identity is verified by preflight against sysfs, not the interface name —
+    names like ens1f0 vary between machines and can drift across firmware
+    changes. For bypass scenarios the check defaults to Solarflare even when
+    unset.
+    """
 
     ports: tuple[NicPort, ...]
     bond_mode: BondMode = BondMode.NONE
     bond_name: Optional[str] = None
+    vendor: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Any, path: str = "nic") -> "NicLayout":
         data = _expect_mapping(data, path)
-        _reject_unknown(data, {"ports", "bond_mode", "bond_name"}, path)
+        _reject_unknown(data, {"ports", "bond_mode", "bond_name", "vendor"}, path)
+        vendor = data.get("vendor")
+        if vendor is not None:
+            vendor = str(vendor).lower()
+            if not re.match(r"^0x[0-9a-f]{4}$", vendor):
+                raise SchemaError(
+                    f"{path}.vendor",
+                    f"expected a PCI vendor id like '0x1924', got {vendor!r}",
+                )
         ports_raw = _expect_list(data.get("ports", []), f"{path}.ports")
         if not ports_raw:
             raise SchemaError(f"{path}.ports", "at least one port is required")
@@ -142,7 +158,7 @@ class NicLayout:
                 raise SchemaError(f"{path}.ports", "bonded layouts need >= 2 ports")
             if not bond_name:
                 raise SchemaError(f"{path}.bond_name", "required when bond_mode != none")
-        return cls(ports=ports, bond_mode=bond_mode, bond_name=bond_name)
+        return cls(ports=ports, bond_mode=bond_mode, bond_name=bond_name, vendor=vendor)
 
     @property
     def interface(self) -> str:

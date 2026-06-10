@@ -136,6 +136,15 @@ class TestNicLayout(unittest.TestCase):
         with self.assertRaises(SchemaError):
             NicLayout.from_dict({"ports": [{"name": "e0", "numa_node": -1}]})
 
+    def test_vendor_normalized_and_validated(self):
+        nic = NicLayout.from_dict({"ports": [{"name": "e0"}], "vendor": "0X1924"})
+        self.assertEqual(nic.vendor, "0x1924")
+        self.assertIsNone(NicLayout.from_dict({"ports": [{"name": "e0"}]}).vendor)
+        with self.assertRaises(SchemaError):
+            NicLayout.from_dict({"ports": [{"name": "e0"}], "vendor": "solarflare"})
+        with self.assertRaises(SchemaError):
+            NicLayout.from_dict({"ports": [{"name": "e0"}], "vendor": "0x19245"})
+
 
 class TestCpuLayout(unittest.TestCase):
     def test_roles(self):

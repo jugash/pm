@@ -198,6 +198,32 @@ def preflight(path, ids, role, transport, client_host, server_host, ssh_user, ss
 
 
 @main.command()
+@click.option("--role", type=click.Choice(["client", "server"]), default="client",
+              show_default=True, help="Which host/pod options to use.")
+@_with_transport
+def nics(role, transport, client_host, server_host, ssh_user, ssh_key,
+         namespace, client_pod, server_pod):
+    """Discover NICs on a target by PCI identity (vendor/device/address/NUMA).
+
+    Use this to write scenario files from facts: interface names differ per
+    machine, so copy the name + pci + numa_node this prints. Solarflare
+    ports (PCI vendor 0x1924) are flagged.
+    """
+    from perfbench.capture.discover import discover_nics
+
+    host = client_host if role == "client" else server_host
+    pod = client_pod if role == "client" else server_pod
+    executor = _build_executor(transport, host, ssh_user, ssh_key, namespace, pod)
+    rows = discover_nics(executor)
+    for row in rows:
+        row["solarflare"] = "yes" if row["solarflare"] else ""
+    click.echo(f"# {executor.describe()}")
+    click.echo(format_table(
+        rows, ["name", "driver", "vendor", "device", "pci", "numa_node", "solarflare"]
+    ))
+
+
+@main.command()
 @click.option("--db", default="results/perfbench.sqlite", show_default=True)
 @click.option("--metric", default="latency_ns", show_default=True)
 @click.option("--quantile", default="0.99", show_default=True,

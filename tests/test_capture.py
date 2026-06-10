@@ -27,6 +27,8 @@ GOOD_HOST = {
     "smt/control": _ok("off"),
     "transparent_hugepage": _ok("always madvise [never]"),
     "ethtool -i": _ok("driver: sfc\nversion: 5.3.16\nfirmware-version: 8.2.7\n"),
+    "device/vendor": _ok("0x1924"),  # Solarflare PCI vendor id
+    "readlink -f": _ok("0000:3b:00.0"),
     "onload --version": _ok("OpenOnload 8.1.2\n"),
 }
 
@@ -48,7 +50,7 @@ class TestPreflight(unittest.TestCase):
         self.assertEqual(
             names,
             {"irqbalance", "cpu_isolation", "cpu_governor", "smt",
-             "transparent_hugepages", "nic_driver", "onload"},
+             "transparent_hugepages", "nic_driver", "nic_identity", "onload"},
         )
 
     def test_irqbalance_running_is_fatal(self):
@@ -105,6 +107,62 @@ class TestPreflight(unittest.TestCase):
         responses["ethtool -i"] = _fail("no such device")
         fatals = fatal_failures(run_preflight(FakeExecutor(responses=responses), make_scenario()))
         self.assertEqual([f.name for f in fatals], ["nic_driver"])
+
+    def _identity(self, results):
+        return [r for r in results if r.name == "nic_identity"][0]
+
+    def test_nic_identity_verified_by_vendor(self):
+        results = run_preflight(FakeExecutor(responses=dict(GOOD_HOST)), make_scenario())
+        check = self._identity(results)
+        self.assertTrue(check.passed, check.message)
+        self.assertIn("ens1f0=0x1924", check.message)
+
+    def test_nic_identity_wrong_vendor_fatal_for_bypass(self):
+        responses = dict(GOOD_HOST)
+        responses["device/vendor"] = _ok("0x8086")  # intel, not solarflare
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        fatals = fatal_failures(results)
+        self.assertIn("nic_identity", [f.name for f in fatals])
+        self.assertIn("expected 0x1924 (Solarflare)", self._identity(results).message)
+
+    def test_nic_identity_kernel_scenario_any_vendor_ok(self):
+        responses = dict(GOOD_HOST)
+        responses["device/vendor"] = _ok("0x8086")
+        results = run_preflight(FakeExecutor(responses=responses), kernel_scenario())
+        self.assertTrue(self._identity(results).passed)
+
+    def test_nic_identity_explicit_vendor_enforced_on_kernel(self):
+        scenario = kernel_scenario(
+            nic={"ports": [{"name": "eth7"}], "vendor": "0x1924"}
+        )
+        responses = dict(GOOD_HOST)
+        responses["device/vendor"] = _ok("0x8086")
+        results = run_preflight(FakeExecutor(responses=responses), scenario)
+        self.assertFalse(self._identity(results).passed)
+
+    def test_nic_identity_pci_drift_fatal(self):
+        scenario = make_scenario(
+            nic={"ports": [{"name": "ens1f0", "pci": "0000:5e:00.0"}]}
+        )
+        results = run_preflight(FakeExecutor(responses=dict(GOOD_HOST)), scenario)
+        check = self._identity(results)
+        self.assertFalse(check.passed)
+        self.assertIn("name drift", check.message)
+
+    def test_nic_identity_pci_match_ok(self):
+        scenario = make_scenario(
+            nic={"ports": [{"name": "ens1f0", "pci": "0000:3B:00.0"}]}  # case-insensitive
+        )
+        results = run_preflight(FakeExecutor(responses=dict(GOOD_HOST)), scenario)
+        self.assertTrue(self._identity(results).passed)
+
+    def test_nic_identity_missing_interface_fatal(self):
+        responses = dict(GOOD_HOST)
+        responses["device/vendor"] = _fail("No such file or directory")
+        results = run_preflight(FakeExecutor(responses=responses), make_scenario())
+        check = self._identity(results)
+        self.assertFalse(check.passed)
+        self.assertIn("no such interface", check.message)
 
     def test_onload_missing_fatal_for_bypass_only(self):
         responses = dict(GOOD_HOST)
