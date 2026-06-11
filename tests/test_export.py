@@ -101,6 +101,21 @@ class TestMetricsStore(unittest.TestCase):
         self.assertEqual(store.run_count(), 2)
         self.assertIn('rep="1"', store.render())
 
+    def test_state_file_compacted_on_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.jsonl"
+            store = MetricsStore(state_file=state)
+            for i in range(5):  # same (scenario, rep): supersede 4 times
+                store.ingest(_record(run_id=f"r{i}",
+                                     started=f"2026-01-0{i + 1}T00:00:00").to_dict())
+            self.assertEqual(len(state.read_text().splitlines()), 5)  # append-only
+            reloaded = MetricsStore(state_file=state)
+            self.assertEqual(reloaded.run_count(), 1)
+            # rewritten with only the retained run
+            lines = state.read_text().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn("r4", lines[0])
+
     def test_state_file_persistence(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "state.jsonl"

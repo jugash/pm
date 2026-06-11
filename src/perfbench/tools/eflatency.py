@@ -16,7 +16,7 @@ import re
 from typing import Optional
 
 from perfbench.config.schema import NetworkPath, Scenario
-from perfbench.errors import ParseError
+from perfbench.errors import ParseError, SchemaError
 from perfbench.results.models import Measurement
 from perfbench.tools.base import ToolAdapter, register, taskset_prefix
 
@@ -47,9 +47,10 @@ class Eflatency(ToolAdapter):
 
     def _check_path(self, scenario: Scenario) -> None:
         if scenario.network_path is not NetworkPath.EFVI:
-            raise ParseError(
+            raise SchemaError(
+                "tools.eflatency",
                 "eflatency measures the raw ef_vi layer; use it only in "
-                "scenarios with network_path: efvi"
+                "scenarios with network_path: efvi",
             )
 
     def server_command(self, scenario: Scenario) -> Optional[str]:

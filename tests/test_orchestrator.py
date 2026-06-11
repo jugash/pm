@@ -103,6 +103,28 @@ class TestRunScenario(unittest.TestCase):
         self.assertEqual(records[0].preflight, [])
         self.assertTrue(records[0].tool_runs[0].ok)
 
+    def test_server_death_during_settle_reported(self):
+        from perfbench.runner.base import FakeBackground
+
+        class DeadServerExecutor(FakeExecutor):
+            def start(self, command, env=None):
+                self.calls.append(f"START {command}")
+                return FakeBackground(
+                    result=ExecResult(command, exit_code=1,
+                                      stderr="bind: address already in use"),
+                    _running=False,
+                )
+
+        client, _ = _executors()
+        server = DeadServerExecutor(name="server", responses=dict(GOOD_HOST))
+        records = _orchestrator(client, server).run_scenario(make_scenario())
+        tool_run = records[0].tool_runs[0]
+        self.assertFalse(tool_run.ok)
+        self.assertIn("server exited before client start", tool_run.error)
+        self.assertIn("address already in use", tool_run.error)
+        # client never ran the benchmark against a dead server
+        self.assertFalse(any("sockperf ping-pong" in c for c in client.calls))
+
     def test_tool_failure_recorded_not_raised(self):
         client, server = _executors()
         client.responses["sockperf ping-pong"] = _fail("connection refused", 1)

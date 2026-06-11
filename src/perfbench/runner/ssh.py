@@ -13,6 +13,8 @@ from typing import Callable, Mapping, Optional
 from perfbench.errors import ExecutionError
 from perfbench.runner.base import BackgroundProcess, ExecResult, Executor
 
+TIMEOUT_EXIT_CODE = 124  # matches coreutils `timeout` and LocalExecutor
+
 
 def _default_client_factory():  # pragma: no cover - requires paramiko + network
     try:
@@ -117,7 +119,24 @@ class SSHExecutor(Executor):
         full = _wrap_env(command, env)
         started = time.monotonic()
         _stdin, stdout, stderr = self._connection().exec_command(full, timeout=timeout)
-        exit_code = stdout.channel.recv_exit_status()
+        channel = stdout.channel
+
+        # paramiko's exec_command timeout only bounds reads; recv_exit_status()
+        # blocks forever if the remote command wedges. Enforce a real deadline.
+        if timeout is not None:
+            deadline = started + timeout
+            while not channel.exit_status_ready():
+                if time.monotonic() >= deadline:
+                    channel.close()
+                    return ExecResult(
+                        command=full,
+                        exit_code=TIMEOUT_EXIT_CODE,
+                        stdout=SSHBackground._read(stdout),
+                        stderr=f"timeout after {timeout}s",
+                        duration_s=time.monotonic() - started,
+                    )
+                time.sleep(0.05)
+        exit_code = channel.recv_exit_status()
         return ExecResult(
             command=full,
             exit_code=exit_code,

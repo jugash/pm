@@ -39,6 +39,14 @@ class TestLocalExecutor(unittest.TestCase):
         self.assertEqual(result.exit_code, TIMEOUT_EXIT_CODE)
         self.assertIn("timeout", result.stderr)
 
+    def test_timeout_kills_whole_process_group(self):
+        # a wedged child holding the pipe must not hang the harness
+        started = time.monotonic()
+        result = self.executor.run("sleep 30 & echo started; sleep 30", timeout=0.3)
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertEqual(result.exit_code, TIMEOUT_EXIT_CODE)
+        self.assertIn("started", result.stdout)
+
     def test_background(self):
         bg = self.executor.start("echo started; sleep 30")
         time.sleep(0.2)
@@ -153,6 +161,19 @@ class TestSSHExecutor(unittest.TestCase):
     def test_run_nonzero(self):
         result = self._executor(_FakeSSHClient(exit_code=2)).run("bad")
         self.assertEqual(result.exit_code, 2)
+
+    def test_run_timeout_deadline_enforced(self):
+        from perfbench.runner.ssh import TIMEOUT_EXIT_CODE
+
+        # remote never exits: recv_exit_status would block forever without
+        # the deadline loop
+        client = _FakeSSHClient(exited=False, stdout=b"partial")
+        started = time.monotonic()
+        result = self._executor(client).run("wedged-tool", timeout=0.2)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(result.exit_code, TIMEOUT_EXIT_CODE)
+        self.assertEqual(result.stdout, "partial")
+        self.assertIn("timeout", result.stderr)
 
     def test_background_stop_while_running(self):
         client = _FakeSSHClient(exited=False, stdout=b"partial")

@@ -20,7 +20,7 @@ import re
 from typing import Optional
 
 from perfbench.config.schema import Protocol, Scenario
-from perfbench.errors import ParseError
+from perfbench.errors import ParseError, SchemaError
 from perfbench.results.models import Measurement
 from perfbench.tools.base import ToolAdapter, quantile_label, register, us_to_ns
 
@@ -53,7 +53,7 @@ class Sockperf(ToolAdapter):
     def client_command(self, scenario: Scenario, server_address: str) -> str:
         mode = str(self.params["mode"])
         if mode not in ("ping-pong", "under-load"):
-            raise ParseError(f"sockperf: unknown mode {mode!r}")
+            raise SchemaError("tools.sockperf.params.mode", f"unknown mode {mode!r}")
         rate = f" --mps {self.params['mps']}" if mode == "under-load" else ""
         command = (
             f"{self.params['binary']} {mode} -i {server_address} -p {self.params['port']} "

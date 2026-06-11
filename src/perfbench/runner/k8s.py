@@ -213,9 +213,11 @@ class K8sBenchSession:
         self.ready_timeout_s = ready_timeout_s
 
     def pod_name(self, scenario: Scenario, role: str) -> str:
-        # RFC 1123 label, 63 chars max
-        base = f"pb-{scenario.id}-{role}".replace("_", "-").replace(".", "-")
-        return base[:63].rstrip("-")
+        # RFC 1123 label, 63 chars max. Truncate the scenario id, never the
+        # role suffix — otherwise long ids would collapse client and server
+        # to the same pod name.
+        base = scenario.id.replace("_", "-").replace(".", "-")[:52].rstrip("-")
+        return f"pb-{base}-{role}"
 
     def provision(self, scenario: Scenario) -> BenchDeployment:
         for role in ("server", "client"):

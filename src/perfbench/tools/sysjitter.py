@@ -22,7 +22,7 @@ from typing import Optional
 from perfbench.config.schema import Scenario
 from perfbench.errors import ParseError
 from perfbench.results.models import Measurement
-from perfbench.tools.base import ToolAdapter, cores_arg, register, taskset_prefix
+from perfbench.tools.base import ToolAdapter, cores_arg, register
 
 # row key -> (metric, unit, extra labels)
 _ROW_METRICS: dict[str, tuple[str, str, dict[str, str]]] = {

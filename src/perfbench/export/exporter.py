@@ -70,6 +70,16 @@ class MetricsStore:
                 self._ingest(json.loads(line), persist=False)
             except (json.JSONDecodeError, KeyError):
                 continue  # tolerate a corrupt tail line
+        # The file is append-only at runtime, so it accumulates superseded
+        # runs; rewrite it with only the retained set on every startup.
+        self._compact_state()
+
+    def _compact_state(self) -> None:
+        tmp = self._state_file.with_suffix(".tmp")
+        with tmp.open("w") as fh:
+            for record in self._runs.values():
+                fh.write(json.dumps(record) + "\n")
+        tmp.replace(self._state_file)
 
     def ingest(self, record: dict[str, Any]) -> None:
         self._ingest(record, persist=True)

@@ -160,6 +160,19 @@ class Orchestrator:
         if plan.server_command:
             background = self.server.start(plan.server_command)
             self.sleep(self.settle_s)
+            if not background.running():
+                # server died during settle (port in use, missing binary,
+                # onload failure...) — fail with ITS error, not the client's
+                # confusing "connection refused"
+                server_result = background.stop()
+                detail = (server_result.stderr or server_result.stdout).strip()[:300]
+                tool_run.exit_code = server_result.exit_code or 1
+                tool_run.error = (
+                    f"server exited before client start "
+                    f"(rc={server_result.exit_code}): {detail}"
+                )
+                self.on_event(f"[{scenario.id}] {plan.adapter.name} FAILED: {tool_run.error}")
+                return tool_run
 
         result = self.client.run(plan.client_command, timeout=plan.timeout_s)
         tool_run.exit_code = result.exit_code

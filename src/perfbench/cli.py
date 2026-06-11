@@ -58,7 +58,9 @@ def _select(scenarios, ids):
     missing = [i for i in ids if i not in by_id]
     if missing:
         raise click.UsageError(f"unknown scenario id(s): {missing}")
-    return [by_id[i] for i in ids]
+    seen: set = set()
+    ordered = [i for i in ids if not (i in seen or seen.add(i))]  # dedupe, keep order
+    return [by_id[i] for i in ordered]
 
 
 @click.group()
@@ -289,7 +291,17 @@ def _report_records(records, scenario_id, push_url):
         if bad:
             failed += 1
         if push_url:
-            push_run(push_url, record.to_dict())
+            try:
+                push_run(push_url, record.to_dict())
+            except PerfBenchError as exc:
+                # never lose a finished benchmark to a flaky exporter: the
+                # records are already in SQLite and can be replayed later
+                click.echo(
+                    f"WARNING: push to {push_url} failed ({exc}); results are "
+                    "stored locally — replay later with `perfbench push`",
+                    err=True,
+                )
+                push_url = None  # stop retrying for the remaining records
     return failed
 
 

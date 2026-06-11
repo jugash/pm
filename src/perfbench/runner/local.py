@@ -13,6 +13,15 @@ from perfbench.runner.base import BackgroundProcess, ExecResult, Executor
 TIMEOUT_EXIT_CODE = 124  # matches coreutils `timeout`
 
 
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    """Signal the whole process group so children (the actual benchmark
+    binary under sh/taskset/onload) die too and release the pipes."""
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, PermissionError):  # already gone
+        pass
+
+
 class LocalBackground(BackgroundProcess):
     def __init__(self, command: str, proc: subprocess.Popen):
         self.command = command
@@ -22,21 +31,13 @@ class LocalBackground(BackgroundProcess):
     def running(self) -> bool:
         return self._proc.poll() is None
 
-    def _signal_group(self, sig: int) -> None:
-        """Signal the whole process group so children (the actual benchmark
-        binary under sh/taskset/onload) die too and release the pipes."""
-        try:
-            os.killpg(os.getpgid(self._proc.pid), sig)
-        except (ProcessLookupError, PermissionError):  # already gone
-            pass
-
     def stop(self) -> ExecResult:
         if self._proc.poll() is None:
-            self._signal_group(signal.SIGTERM)
+            _signal_group(self._proc, signal.SIGTERM)
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-                self._signal_group(signal.SIGKILL)
+                _signal_group(self._proc, signal.SIGKILL)
         stdout, stderr = self._proc.communicate()
         return ExecResult(
             command=self.command,
@@ -62,31 +63,44 @@ class LocalExecutor(Executor):
         return merged
 
     def run(self, command, timeout=None, env=None, input_data=None) -> ExecResult:
+        # Popen + process group (not subprocess.run): on timeout the whole
+        # group must die, otherwise orphaned children of /bin/sh keep the
+        # output pipes open and the final communicate() blocks until the
+        # orphan exits — a wedged benchmark would hang the harness.
         started = time.monotonic()
+        proc = subprocess.Popen(
+            ["/bin/sh", "-c", command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE if input_data is not None else None,
+            text=True,
+            env=self._merged_env(env),
+            start_new_session=True,
+        )
         try:
-            proc = subprocess.run(
-                ["/bin/sh", "-c", command],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=self._merged_env(env),
-                input=input_data,
-            )
-            return ExecResult(
-                command=command,
-                exit_code=proc.returncode,
-                stdout=proc.stdout,
-                stderr=proc.stderr,
-                duration_s=time.monotonic() - started,
-            )
-        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = proc.communicate(input=input_data, timeout=timeout)
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            _signal_group(proc, signal.SIGTERM)
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+                _signal_group(proc, signal.SIGKILL)
+                stdout, stderr = proc.communicate()
             return ExecResult(
                 command=command,
                 exit_code=TIMEOUT_EXIT_CODE,
-                stdout=(exc.stdout or b"").decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ""),
+                stdout=stdout or "",
                 stderr=f"timeout after {timeout}s",
                 duration_s=time.monotonic() - started,
             )
+        return ExecResult(
+            command=command,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            duration_s=time.monotonic() - started,
+        )
 
     def start(self, command, env=None) -> BackgroundProcess:
         proc = subprocess.Popen(

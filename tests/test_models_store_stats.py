@@ -92,6 +92,16 @@ class TestStore(unittest.TestCase):
         store.save_run(_record(run_id="r2", scenario_id="s1", started="2026-01-02T00:00:00"))
         self.assertEqual(store.latest_run_ids(), {"s1": "r2"})
 
+    def test_latest_run_ids_with_clock_skew(self):
+        # newest started_at carries a lexically SMALLER run_id: the naive
+        # tuple-IN-of-MAXes query silently returned nothing here
+        store = ResultStore()
+        store.save_run(_record(run_id="zz-old", scenario_id="s1",
+                               started="2026-01-01T00:00:00"))
+        store.save_run(_record(run_id="aa-new", scenario_id="s1",
+                               started="2026-01-02T00:00:00"))
+        self.assertEqual(store.latest_run_ids(), {"s1": "aa-new"})
+
     def test_export_json_and_file_store(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "x.sqlite"

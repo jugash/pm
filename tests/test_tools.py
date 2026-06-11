@@ -116,7 +116,7 @@ class TestSockperf(unittest.TestCase):
         self.assertNotIn("--tcp", cmd)
 
     def test_bad_mode(self):
-        with self.assertRaises(ParseError):
+        with self.assertRaises(SchemaError):
             _tool("sockperf", mode="warp").client_command(make_scenario(), "h")
 
     def test_parse(self):
@@ -236,7 +236,7 @@ class TestEflatency(unittest.TestCase):
         )
 
     def test_requires_efvi_path(self):
-        with self.assertRaises(ParseError):
+        with self.assertRaises(SchemaError):
             _tool("eflatency").client_command(make_scenario(), "h")
 
     def test_commands(self):

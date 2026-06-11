@@ -109,6 +109,16 @@ class TestK8sBenchSession(unittest.TestCase):
         sc = make_scenario(id="bm.onload_x2")
         self.assertEqual(session.pod_name(sc, "client"), "pb-bm-onload-x2-client")
 
+    def test_pod_name_long_id_keeps_role_distinct(self):
+        session, _ = self._session()
+        sc = make_scenario(id="x" * 70)
+        client = session.pod_name(sc, "client")
+        server = session.pod_name(sc, "server")
+        self.assertNotEqual(client, server)
+        self.assertLessEqual(len(client), 63)
+        self.assertTrue(client.endswith("-client"))
+        self.assertTrue(server.endswith("-server"))
+
     def test_provision_applies_waits_and_resolves_address(self):
         session, fake = self._session()
         deployment = session.provision(make_scenario())

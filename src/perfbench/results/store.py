@@ -96,13 +96,22 @@ class ResultStore:
         return [dict(zip(cols, r)) for r in self._conn.execute(sql, args)]
 
     def latest_run_ids(self) -> dict[str, str]:
-        """Latest run id per scenario (by started_at, then run_id)."""
+        """Latest run id per scenario (by started_at, then run_id).
+
+        Uses a window function: a tuple-IN against independent MAX()
+        aggregates would silently drop scenarios whenever the newest run
+        doesn't also carry the lexically-largest run id (clock skew).
+        """
         rows = self._conn.execute(
             """
-            SELECT scenario_id, run_id FROM runs
-            WHERE (scenario_id, started_at, run_id) IN (
-                SELECT scenario_id, MAX(started_at), MAX(run_id) FROM runs GROUP BY scenario_id
-            )
+            SELECT scenario_id, run_id FROM (
+                SELECT scenario_id, run_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY scenario_id
+                           ORDER BY started_at DESC, run_id DESC
+                       ) AS rn
+                FROM runs
+            ) WHERE rn = 1
             """
         ).fetchall()
         return {scenario: run_id for scenario, run_id in rows}

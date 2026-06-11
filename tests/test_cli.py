@@ -172,6 +172,15 @@ class TestRunAndReport(CliTestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertIn("ERROR", result.output)
 
+    def test_push_failure_warns_but_preserves_results(self):
+        # unreachable exporter: the benchmark must still succeed and persist
+        result, db = self._run("--push", "http://127.0.0.1:1")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("results are stored locally", result.output)
+        store = ResultStore(db)
+        self.assertEqual(len(store.list_runs()), 1)
+        store.close()
+
     def test_run_with_push(self):
         server = make_server("127.0.0.1", 0, MetricsStore())
         port = server.server_address[1]
