@@ -46,35 +46,47 @@ class TestKubectl(unittest.TestCase):
         with self.assertRaises(ExecutionError):
             k2.pod_ip("p")
 
+    @staticmethod
+    def _pod_json(annotations):
+        import json as _json
+
+        return ExecResult(
+            "", 0, stdout=_json.dumps({"metadata": {"annotations": annotations}})
+        )
+
     def test_pod_network_ip(self):
         status = (
             '[{"name": "default/cbr0", "ips": ["10.1.0.5"]},'
             ' {"name": "perfbench/sriov-trading", "ips": ["192.168.10.5"]}]'
         )
-        k, _ = _kubectl(responses={"network-status": ExecResult("", 0, stdout=status)})
+        k, fake = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/network-status": status})
+        })
         self.assertEqual(k.pod_network_ip("p", "sriov-trading"), "192.168.10.5")
+        # no jsonpath: dotted annotation keys don't survive shell quoting
+        self.assertNotIn("jsonpath", fake.calls[-1])
         with self.assertRaises(ExecutionError):
             k.pod_network_ip("p", "missing-net")
-        k2, _ = _kubectl(responses={"network-status": ExecResult("", 0, stdout="not json")})
+        k2, _ = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/network-status": "not json"})
+        })
         with self.assertRaises(ExecutionError):
             k2.pod_network_ip("p", "x")
 
     def test_pod_network_ip_old_multus_annotation_fallback(self):
-        # older Multus writes networks-status (plural); the new-key query
-        # returns empty and the fallback must find the IP
+        # older Multus writes networks-status (plural)
         status = '[{"name": "perfbench/sriov-trading", "ips": ["192.168.10.5"]}]'
-        k, fake = _kubectl(
-            responses={"networks-status": ExecResult("", 0, stdout=status)}
-        )
+        k, _ = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/networks-status": status})
+        })
         self.assertEqual(k.pod_network_ip("p", "sriov-trading"), "192.168.10.5")
-        self.assertEqual(len(fake.calls), 2)
 
     def test_pod_network_ip_missing_annotation_is_diagnostic(self):
-        # no annotation at all -> error explains what to check, including
+        # no status annotation -> error explains what to check, including
         # what (if anything) the pod requested
-        k, _ = _kubectl(
-            responses={"io/networks}": ExecResult("", 0, stdout="sriov-trading")}
-        )
+        k, _ = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/networks": "sriov-trading"})
+        })
         with self.assertRaises(ExecutionError) as ctx:
             k.pod_network_ip("p", "sriov-trading")
         msg = str(ctx.exception)
@@ -84,7 +96,9 @@ class TestKubectl(unittest.TestCase):
 
     def test_pod_network_ip_wrong_network_lists_attached(self):
         status = '[{"name": "perfbench/other-net", "ips": ["192.168.10.5"]}]'
-        k, _ = _kubectl(responses={"network-status": ExecResult("", 0, stdout=status)})
+        k, _ = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/network-status": status})
+        })
         with self.assertRaises(ExecutionError) as ctx:
             k.pod_network_ip("p", "sriov-trading")
         self.assertIn("perfbench/other-net", str(ctx.exception))
@@ -117,10 +131,10 @@ class TestK8sBenchSession(unittest.TestCase):
         from perfbench.runner.k8s import K8sBenchSession
 
         base = {
-            "network-status": ExecResult(
-                "", 0,
-                stdout='[{"name": "perfbench/sriov-trading", "ips": ["192.168.100.7"]}]',
-            ),
+            "--output json": TestKubectl._pod_json({
+                "k8s.v1.cni.cncf.io/network-status":
+                    '[{"name": "perfbench/sriov-trading", "ips": ["192.168.100.7"]}]',
+            }),
         }
         base.update(responses or {})
         kubectl, fake = _kubectl(responses=base)

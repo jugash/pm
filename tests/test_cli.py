@@ -214,12 +214,15 @@ class TestK8sRunCommand(CliTestCase):
         super().setUp()
         from perfbench.runner.base import ExecResult, FakeExecutor
 
+        import json as _json
+
+        pod_json = _json.dumps({"metadata": {"annotations": {
+            "k8s.v1.cni.cncf.io/network-status":
+                '[{"name": "perfbench/sriov-net", "ips": ["192.168.100.9"]}]',
+        }}})
         self.fake = FakeExecutor(
             responses={
-                "network-status": ExecResult(
-                    "", 0,
-                    stdout='[{"name": "perfbench/sriov-net", "ips": ["192.168.100.9"]}]',
-                ),
+                "--output json": ExecResult("", 0, stdout=pod_json),
                 "get pod": ExecResult("", 0, stdout="10.0.0.5"),
                 "latency=": ExecResult("", 0, stdout="latency=123 server=x"),
             }

@@ -80,21 +80,34 @@ class Kubectl:
             raise ExecutionError(f"pod {pod} has no IP yet")
         return ip
 
-    def _annotation(self, pod: str, key: str) -> str:
-        escaped = key.replace(".", "\\.")
-        result = self._run(
-            f"get pod {pod} -o jsonpath={{.metadata.annotations.{escaped}}}"
-        )
-        return result.stdout.strip()
+    def pod_annotations(self, pod: str) -> dict:
+        """All annotations of a pod.
+
+        Fetched as ``-o json`` and parsed here rather than via jsonpath:
+        annotation keys contain dots that need ``\\.`` escaping in jsonpath,
+        and those backslashes don't survive the ``/bin/sh -c`` (or ssh)
+        layers the executors run commands through.
+        """
+        result = self._run(f"get pod {pod} --output json")
+        try:
+            doc = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ExecutionError(
+                f"cannot parse `kubectl get pod {pod} --output json` output"
+            ) from exc
+        return doc.get("metadata", {}).get("annotations", {}) or {}
 
     def pod_network_ip(self, pod: str, network: str) -> str:
         """IP on a secondary (Multus) network, from the network-status
         annotation (``networks-status`` fallback for older Multus)."""
-        raw = self._annotation(pod, "k8s.v1.cni.cncf.io/network-status")
+        annotations = self.pod_annotations(pod)
+        raw = (
+            annotations.get("k8s.v1.cni.cncf.io/network-status")
+            or annotations.get("k8s.v1.cni.cncf.io/networks-status")
+            or ""
+        ).strip()
         if not raw:
-            raw = self._annotation(pod, "k8s.v1.cni.cncf.io/networks-status")
-        if not raw:
-            requested = self._annotation(pod, "k8s.v1.cni.cncf.io/networks")
+            requested = annotations.get("k8s.v1.cni.cncf.io/networks", "")
             raise ExecutionError(
                 f"pod {pod} has no Multus network-status annotation "
                 f"(networks requested: {requested or 'NONE'}). Multus did not "
