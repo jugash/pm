@@ -88,6 +88,16 @@ Job. The Job runs `perfbench k8s-run`, which is fully self-contained:
 2. applies them, waits for Ready, resolves the **data-path address** from
    the Multus `network-status` annotation (never the cluster pod IP — that
    would benchmark the CNI overlay);
+
+   The NAD must have IPAM so the pods get an L3 address on the data path.
+   Two options: dynamic (`nad.ipam` whereabouts/host-local, the chart's
+   default) — the harness reads the assigned IP from `network-status`; or
+   **static per-pod IPs** — set `runner.clientIp`/`serverIp` (CLI:
+   `--client-ip/--server-ip`, CIDR form like `192.168.100.2/24`) and the
+   harness requests them through the Multus annotation's `ips` field. The
+   static path needs the NAD's IPAM to be `{"type": "static"}` and gives
+   deterministic addresses run after run — useful when switch ACLs or
+   multicast IGMP snooping config reference fixed source addresses;
 3. runs preflight + env capture + tools through the same orchestrator as
    bare metal, pushing each rep to the exporter;
 4. deletes the pods (cleanup is by-name and runs even after partial
@@ -100,8 +110,11 @@ perfbench k8s-run scenarios/ -s k8s-onload-net \
   --namespace perfbench --image ghcr.io/jugash/perfbench-bench:0.1.0 \
   --client-node worker-a --server-node worker-b \
   --network sriov-trading --sriov-resource amd.com/sfc_vf \
+  --client-ip 192.168.100.1/24 --server-ip 192.168.100.2/24 \
   --push http://perfbench-exporter.perfbench:9109
 ```
+
+(Drop `--client-ip/--server-ip` when the NAD does dynamic IPAM.)
 
 ## How preflight works inside pods
 

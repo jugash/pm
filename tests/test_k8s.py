@@ -94,6 +94,33 @@ class TestKubectl(unittest.TestCase):
         self.assertIn("networks requested: sriov-trading", msg)
         self.assertIn("net-attach-def", msg)
 
+    def test_pod_network_ip_namespaced_request(self):
+        # config may carry namespace/name; status may carry either form
+        status = '[{"name": "perfbench/sriov-trading", "ips": ["192.168.10.5"]}]'
+        k, _ = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/network-status": status})
+        })
+        self.assertEqual(
+            k.pod_network_ip("p", "perfbench/sriov-trading"), "192.168.10.5"
+        )
+        # same name in a different namespace must NOT match
+        with self.assertRaises(ExecutionError):
+            k.pod_network_ip("p", "other-ns/sriov-trading")
+        # bare names must match exactly, not by substring
+        with self.assertRaises(ExecutionError):
+            k.pod_network_ip("p", "trading")
+
+    def test_pod_network_ip_attached_but_no_ipam(self):
+        status = '[{"name": "perfbench/sriov-trading", "interface": "net1"}]'
+        k, _ = _kubectl(responses={
+            "--output json": self._pod_json({"k8s.v1.cni.cncf.io/network-status": status})
+        })
+        with self.assertRaises(ExecutionError) as ctx:
+            k.pod_network_ip("p", "sriov-trading")
+        msg = str(ctx.exception)
+        self.assertIn("attached", msg)
+        self.assertIn("IPAM", msg)
+
     def test_pod_network_ip_wrong_network_lists_attached(self):
         status = '[{"name": "perfbench/other-net", "ips": ["192.168.10.5"]}]'
         k, _ = _kubectl(responses={
@@ -102,6 +129,52 @@ class TestKubectl(unittest.TestCase):
         with self.assertRaises(ExecutionError) as ctx:
             k.pod_network_ip("p", "sriov-trading")
         self.assertIn("perfbench/other-net", str(ctx.exception))
+
+
+class TestStaticIps(unittest.TestCase):
+    def _render(self, **kwargs):
+        from perfbench.runner.k8s import render_benchmark_pod
+
+        return yaml.safe_load(render_benchmark_pod(
+            name="pb-x-client", scenario=make_scenario(), role="client",
+            image="bench:1", **kwargs,
+        ))
+
+    def test_annotation_plain_without_static_ip(self):
+        manifest = self._render(networks=("sriov-trading", "other"))
+        annotation = manifest["metadata"]["annotations"]["k8s.v1.cni.cncf.io/networks"]
+        self.assertEqual(annotation, "sriov-trading, other")
+
+    def test_annotation_json_with_static_ip(self):
+        import json as _json
+
+        manifest = self._render(
+            networks=("perfbench/sriov-trading", "other"),
+            static_ip="192.168.100.1/24",
+        )
+        annotation = manifest["metadata"]["annotations"]["k8s.v1.cni.cncf.io/networks"]
+        entries = _json.loads(annotation)
+        self.assertEqual(entries[0]["name"], "sriov-trading")
+        self.assertEqual(entries[0]["namespace"], "perfbench")
+        self.assertEqual(entries[0]["ips"], ["192.168.100.1/24"])
+        # only the data-path (first) network gets the static IP
+        self.assertEqual(entries[1], {"name": "other"})
+
+    def test_session_uses_static_server_ip_directly(self):
+        from perfbench.runner.k8s import K8sBenchSession
+
+        kubectl, fake = _kubectl()  # no network-status response needed
+        session = K8sBenchSession(
+            kubectl, image="bench:1", networks=("sriov-trading",),
+            client_ip="192.168.100.1/24", server_ip="192.168.100.2/24",
+        )
+        deployment = session.provision(make_scenario())
+        self.assertEqual(deployment.server_address, "192.168.100.2")
+        # static path never queries the pod for its annotations
+        self.assertFalse(any("--output json" in c for c in fake.calls))
+        # rendered pods carry per-role ips in the applied manifests
+        applied = "\n".join(c for c in fake.calls if "apply" in c)
+        self.assertNotIn("--output json", applied)
 
 
 class TestPodExecutor(unittest.TestCase):

@@ -30,6 +30,44 @@ from perfbench.runner.base import BackgroundProcess, ExecResult, Executor
 from perfbench.runner.local import LocalExecutor
 
 
+def _networks_annotation(networks: Sequence[str], static_ip: Optional[str]) -> str:
+    """Render the Multus ``networks`` annotation.
+
+    Plain comma-joined names normally; the JSON form when a static IP is
+    requested for the first (data-path) network — per-pod ``ips`` requires
+    the NAD's IPAM to be ``{"type": "static"}``.
+    """
+    if not static_ip:
+        return ", ".join(networks)
+    entries = []
+    for i, network in enumerate(networks):
+        ns, _, name = network.rpartition("/")
+        entry: dict = {"name": name}
+        if ns:
+            entry["namespace"] = ns
+        if i == 0:
+            entry["ips"] = [static_ip]
+        entries.append(entry)
+    return json.dumps(entries)
+
+
+def _network_name_matches(requested: str, status_name: str) -> bool:
+    """Match a configured network against a Multus network-status name.
+
+    Status names are usually namespaced (``perfbench/sriov-trading``) while
+    configs typically carry the bare NAD name (``sriov-trading``) — accept
+    either form on either side. Namespaces are only compared when both
+    sides carry one.
+    """
+    if not status_name:
+        return False
+    req_ns, _, req_name = requested.rpartition("/")
+    st_ns, _, st_name = status_name.rpartition("/")
+    if req_name != st_name:
+        return False
+    return not (req_ns and st_ns) or req_ns == st_ns
+
+
 class Kubectl:
     def __init__(
         self,
@@ -122,9 +160,19 @@ class Kubectl:
             raise ExecutionError(
                 f"cannot parse network-status for pod {pod}: {raw[:200]!r}"
             ) from exc
-        for status in statuses:
-            if network in status.get("name", "") and status.get("ips"):
+        matched = [
+            s for s in statuses if _network_name_matches(network, s.get("name", ""))
+        ]
+        for status in matched:
+            if status.get("ips"):
                 return status["ips"][0]
+        if matched:
+            raise ExecutionError(
+                f"pod {pod}: network {matched[0].get('name')!r} is attached "
+                f"but reports no IPs — does the NetworkAttachmentDefinition "
+                f"have IPAM configured (e.g. whereabouts/host-local)? The "
+                f"harness needs an L3 address on the data-path network."
+            )
         attached = [s.get("name", "?") for s in statuses]
         raise ExecutionError(
             f"pod {pod} has no IP on network {network!r}; attached networks: "
@@ -240,6 +288,8 @@ class K8sBenchSession:
         server_node: Optional[str] = None,
         hugepages_2mi: str = "1Gi",
         ready_timeout_s: int = 180,
+        client_ip: Optional[str] = None,
+        server_ip: Optional[str] = None,
     ):
         self.kubectl = kubectl
         self.image = image
@@ -248,6 +298,9 @@ class K8sBenchSession:
         self.nodes = {"client": client_node, "server": server_node}
         self.hugepages_2mi = hugepages_2mi
         self.ready_timeout_s = ready_timeout_s
+        # static IPs (CIDR form, e.g. 192.168.100.2/24) requested via the
+        # Multus annotation on the first network; needs static-IPAM NAD
+        self.static_ips = {"client": client_ip, "server": server_ip}
 
     def pod_name(self, scenario: Scenario, role: str) -> str:
         # RFC 1123 label, 63 chars max. Truncate the scenario id, never the
@@ -268,13 +321,17 @@ class K8sBenchSession:
                 sriov_resource=self.sriov_resource,
                 hugepages_2mi=self.hugepages_2mi,
                 namespace=self.kubectl.namespace,
+                static_ip=self.static_ips[role],
             )
             self.kubectl.apply(manifest)
         for role in ("server", "client"):
             self.kubectl.wait_ready(self.pod_name(scenario, role), self.ready_timeout_s)
 
         server_pod = self.pod_name(scenario, "server")
-        if self.networks:
+        if self.static_ips["server"]:
+            # statically assigned via the networks annotation: known up front
+            address = self.static_ips["server"].split("/")[0]
+        elif self.networks:
             address = self.kubectl.pod_network_ip(server_pod, self.networks[0])
         else:
             address = self.kubectl.pod_ip(server_pod)
@@ -353,11 +410,13 @@ def render_benchmark_pod(
     sriov_resource: Optional[str] = None,
     hugepages_2mi: str = "1Gi",
     namespace: str = "perfbench",
+    static_ip: Optional[str] = None,
 ) -> str:
     """Render a low-latency benchmark pod manifest.
 
     Guaranteed QoS (requests == limits, integral CPUs) so kubelet's static
-    CPU manager grants exclusive cores; SR-IOV VF via Multus annotation;
+    CPU manager grants exclusive cores; SR-IOV VF via Multus annotation
+    (optionally with a static ``ips`` request on the data-path network);
     Onload device nodes mounted for kernel-bypass scenarios.
     """
     cores = scenario.cpu.cores_for_role(role)
@@ -403,7 +462,9 @@ def render_benchmark_pod(
         },
     }
     if networks:
-        metadata["annotations"] = {"k8s.v1.cni.cncf.io/networks": ", ".join(networks)}
+        metadata["annotations"] = {
+            "k8s.v1.cni.cncf.io/networks": _networks_annotation(networks, static_ip)
+        }
 
     spec: dict = {
         "restartPolicy": "Never",

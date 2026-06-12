@@ -64,7 +64,10 @@ sriov:
 nad:
   enabled: false
   name: sriov-trading
-  # static or whereabouts-based IPAM for the benchmark subnet
+  # IPAM for the benchmark subnet. Dynamic (default): whereabouts assigns
+  # from the range. Static: use {"type": "static"} and set
+  # runner.clientIp/serverIp so each pod requests its IP via the Multus
+  # annotation.
   ipam: |-
     {
       "type": "whereabouts",
@@ -94,6 +97,11 @@ runner:
   clientNode: ""          # pin client pod to a node (recommended)
   serverNode: ""          # pin server pod to a different node
   networks: [sriov-trading]
+  # Static IPs (CIDR form) on the first network via the Multus annotation.
+  # Requires the NAD to use static IPAM (nad.ipam: {"type": "static"}).
+  # Leave empty when the NAD has whereabouts/host-local IPAM.
+  clientIp: ""            # e.g. 192.168.100.1/24
+  serverIp: ""            # e.g. 192.168.100.2/24
   sriovResource: amd.com/sfc_vf
   skipPreflight: false
   keepPods: false

@@ -316,6 +316,12 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--server-node", default=None, help="Pin the server pod to a node.")
 @click.option("--network", "networks", multiple=True,
               help="Multus network(s); the first provides the data-path address.")
+@click.option("--client-ip", default=None,
+              help="Static IP (CIDR, e.g. 192.168.100.1/24) for the client pod "
+                   "on the first network; requires a static-IPAM NAD.")
+@click.option("--server-ip", default=None,
+              help="Static IP (CIDR, e.g. 192.168.100.2/24) for the server pod "
+                   "on the first network; requires a static-IPAM NAD.")
 @click.option("--sriov-resource", default=None, help="e.g. amd.com/sfc_vf")
 @click.option("--db", default="results/perfbench.sqlite", show_default=True)
 @click.option("--output-dir", default="results/raw", show_default=True)
@@ -324,8 +330,8 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--push", "push_url", default=None)
 @click.option("--keep-pods", is_flag=True, help="Leave pods running for debugging.")
 def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
-            server_node, networks, sriov_resource, db, output_dir,
-            skip_preflight, settle, push_url, keep_pods):
+            server_node, networks, client_ip, server_ip, sriov_resource,
+            db, output_dir, skip_preflight, settle, push_url, keep_pods):
     """Provision benchmark pods, run k8s scenarios end-to-end, tear down.
 
     Fully self-contained: renders Guaranteed-QoS pods (SR-IOV VF, hugepages,
@@ -353,6 +359,8 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
         sriov_resource=sriov_resource,
         client_node=client_node,
         server_node=server_node,
+        client_ip=client_ip,
+        server_ip=server_ip,
     )
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     store = ResultStore(db)

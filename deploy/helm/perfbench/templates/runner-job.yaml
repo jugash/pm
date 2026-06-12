@@ -42,6 +42,12 @@ spec:
             {{- range .Values.runner.networks }}
             - --network={{ . }}
             {{- end }}
+            {{- if .Values.runner.clientIp }}
+            - --client-ip={{ .Values.runner.clientIp }}
+            {{- end }}
+            {{- if .Values.runner.serverIp }}
+            - --server-ip={{ .Values.runner.serverIp }}
+            {{- end }}
             {{- if .Values.runner.sriovResource }}
             - --sriov-resource={{ .Values.runner.sriovResource }}
             {{- end }}
