@@ -45,8 +45,9 @@ RUN dnf install -y numactl-devel 2>/dev/null || true; \
 RUN git clone --depth 1 https://github.com/Xilinx-CNS/cns-sfnettest /tmp/sfnettest \
     && make -C /tmp/sfnettest/src \
     && install /tmp/sfnettest/src/sfnt-pingpong /usr/local/bin/ \
+    && install /tmp/sfnettest/src/sfnt-stream /usr/local/bin/ \
     && rm -rf /tmp/sfnettest
-RUN git clone --depth 1 https://github.com/Xilinx-CNS/sysjitter /tmp/sysjitter \
+RUN git clone --depth 1 https://github.com/Xilinx-CNS/cns-sysjitter /tmp/sysjitter \
     && make -C /tmp/sysjitter \
     && install /tmp/sysjitter/sysjitter /usr/local/bin/ \
     && rm -rf /tmp/sysjitter

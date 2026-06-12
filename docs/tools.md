@@ -8,7 +8,7 @@ measurements. Time is always nanoseconds; latency distributions use the
 Install sources: `iperf3`, `netperf`, `sockperf`, `rt-tests` (cyclictest)
 from distro packages; `sfnt-pingpong` and `sfnt-stream` from
 [cns-sfnettest](https://github.com/Xilinx-CNS/cns-sfnettest); `sysjitter`
-from [Xilinx-CNS/sysjitter](https://github.com/Xilinx-CNS/sysjitter);
+from [Xilinx-CNS/cns-sysjitter](https://github.com/Xilinx-CNS/cns-sysjitter);
 `eflatency` ships with OpenOnload. `deploy/docker/Dockerfile.bench` builds
 all of them.
 
