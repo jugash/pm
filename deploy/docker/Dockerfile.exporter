@@ -5,13 +5,18 @@
 # or: make image-exporter
 FROM registry.access.redhat.com/ubi9/python-312:latest
 
+# The python-312 image runs as uid 1001, but WORKDIR/COPY create root-owned
+# paths and pip >= 21.3 builds in-tree (writes ./build/lib/perfbench into
+# the source dir) -> "Permission denied". Install as root, then drop back.
+USER 0
 WORKDIR /opt/perfbench
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . && rm -rf build src
 
+USER 1001
 EXPOSE 9109
-# OpenShift assigns an arbitrary non-root UID at runtime; no USER needed and
+# OpenShift assigns an arbitrary non-root UID at runtime regardless of USER;
 # nothing below writes outside the mounted state volume.
 ENTRYPOINT ["perfbench"]
 CMD ["exporter", "--host", "0.0.0.0", "--port", "9109"]
