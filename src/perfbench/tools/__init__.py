@@ -17,6 +17,7 @@ from perfbench.tools import (  # noqa: F401,E402
     iperf3,
     netperf,
     sfnt_pingpong,
+    sfnt_stream,
     sockperf,
     sysjitter,
 )

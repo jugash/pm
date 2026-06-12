@@ -1,0 +1,160 @@
+# Multicast test matrix: kernel vs Onload multicast RX, rate sweep,
+# group-count (fan-in) sweep, receiver fan-out, and multicast over bonds.
+#
+# All multicast tools require UDP. sockperf ping-pong over a group measures
+# RTT to the (first) reflecting receiver; sfnt-stream measures streaming
+# latency across a rate sweep. Onload multicast knobs worth sweeping
+# separately: EF_MCAST_RECV (default on), EF_MCAST_JOIN_BYPASS.
+
+matrices:
+  # ── Core comparison: kernel vs Onload multicast ─────────────────────────
+  - id_template: "mc-{network_path}-pp"
+    base:
+      description: Multicast ping-pong + streaming latency, kernel vs Onload
+      platform: baremetal
+      network_path: kernel        # overridden by axis
+      multicast:
+        group: 239.100.1.1
+        port: 12000
+        ttl: 1
+      nic:
+        vendor: "0x1924"
+        ports:
+          - { card: x2522-a, numa_node: 0 }
+      cpu:
+        client_cores: [4]
+        server_cores: [4]
+        irq_cores: [2]
+        numa_node: 0
+        require_isolated: true
+      tools:
+        - name: sockperf
+          params: { protocol: udp, mode: ping-pong, msg_size: 64, duration_s: 10 }
+        - name: sockperf
+          params: { protocol: udp, mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
+        - name: sfnt-stream
+          params: { protocol: udp, msg_size: 64, rates: [10000, 1000000, 100000], duration_s: 10 }
+      repetitions: 5
+      tags: [multicast, core-comparison]
+    axes:
+      network_path: [kernel, onload]
+
+  # ── Rate sweep: find the latency cliff under multicast load ─────────────
+  - id_template: "mc-{network_path}-rate-{tools.0.params.mps}"
+    base:
+      description: Multicast under-load latency vs message rate
+      platform: baremetal
+      network_path: kernel
+      multicast: { group: 239.100.1.1, port: 12000, ttl: 1 }
+      nic:
+        vendor: "0x1924"
+        ports:
+          - { card: x2522-a, numa_node: 0 }
+      cpu:
+        client_cores: [4]
+        server_cores: [4]
+        irq_cores: [2]
+        require_isolated: true
+      tools:
+        - name: sockperf
+          params: { protocol: udp, mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
+      repetitions: 5
+      tags: [multicast, rate-sweep]
+    axes:
+      network_path: [kernel, onload]
+      tools.0.params.mps: [50000, 100000, 250000, 500000, 1000000]
+
+  # ── Fan-in: group count sweep (filter table / demux cost) ───────────────
+  # group_count consecutive groups from the base address; both sides use a
+  # sockperf feed file. Watch for the kernel falling off a cliff long before
+  # Onload as IGMP/filter state grows.
+  - id_template: "mc-{network_path}-groups-{multicast.group_count}"
+    base:
+      description: Multicast latency vs subscribed group count
+      platform: baremetal
+      network_path: kernel
+      multicast:
+        group: 239.100.2.0
+        port: 12000
+        ttl: 1
+        group_count: 1            # overridden by axis
+      nic:
+        vendor: "0x1924"
+        ports:
+          - { card: x2522-a, numa_node: 0 }
+      cpu:
+        client_cores: [4]
+        server_cores: [4]
+        irq_cores: [2]
+        require_isolated: true
+      tools:
+        - name: sockperf
+          params: { protocol: udp, mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
+      repetitions: 5
+      tags: [multicast, fan-in]
+    axes:
+      network_path: [kernel, onload]
+      multicast.group_count: [1, 8, 64]
+
+  # ── Fan-out: N receiver processes joined to the same group ──────────────
+  # Each receiver is pinned to its own core from server_cores (round-robin).
+  # Latency is to the first reflected reply; messages_duplicated_count
+  # confirms every receiver saw the stream.
+  - id_template: "mc-{network_path}-fanout-{multicast.receivers}"
+    base:
+      description: Multicast fan-out latency vs receiver count
+      platform: baremetal
+      network_path: onload
+      multicast:
+        group: 239.100.3.1
+        port: 12000
+        ttl: 1
+        receivers: 1              # overridden by axis
+      nic:
+        vendor: "0x1924"
+        ports:
+          - { card: x2522-a, numa_node: 0 }
+      cpu:
+        client_cores: [4]
+        server_cores: [4, 5, 6, 7, 8, 9, 10, 11]
+        irq_cores: [2]
+        require_isolated: true
+      tools:
+        - name: sockperf
+          params: { protocol: udp, mode: ping-pong, msg_size: 64, duration_s: 10 }
+      repetitions: 5
+      tags: [multicast, fan-out]
+    axes:
+      network_path: [kernel, onload]
+      multicast.receivers: [1, 2, 4, 8]
+
+  # ── Multicast over an active-backup bond ────────────────────────────────
+  # Which slave carries the IGMP join + traffic, and what failover costs,
+  # are exactly the things multicast-over-bond gets wrong in practice.
+  - id_template: "mc-{network_path}-bond-ab"
+    base:
+      description: Multicast over active-backup bond, kernel vs Onload
+      platform: baremetal
+      network_path: kernel
+      multicast: { group: 239.100.4.1, port: 12000, ttl: 1 }
+      nic:
+        vendor: "0x1924"
+        bond_mode: active_backup
+        bond_name: bond0
+        ports:
+          - { card: x2522-a, numa_node: 0 }
+          - { card: x2522-b, numa_node: 0 }
+      cpu:
+        client_cores: [4]
+        server_cores: [4]
+        irq_cores: [2]
+        require_isolated: true
+      tools:
+        - name: sockperf
+          params: { protocol: udp, mode: ping-pong, msg_size: 64, duration_s: 10 }
+        - name: sockperf
+          params: { protocol: udp, mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
+      repetitions: 5
+      tags: [multicast, bonding]
+    axes:
+      network_path: [kernel, onload]

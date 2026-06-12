@@ -50,7 +50,9 @@ doing so in one matrix. The shipped scenario files isolate axes deliberately:
 - `baremetal-kernel-vs-onload.yaml` — network path only, then Onload
   spin-vs-interrupt only;
 - `bonding-matrix.yaml` — bond layout only, on a fixed Onload config;
-- `k8s-vs-baremetal.yaml` — platform only, identical NIC/CPU/Onload settings.
+- `k8s-vs-baremetal.yaml` — platform only, identical NIC/CPU/Onload settings;
+- `multicast-matrix.yaml` — one multicast dimension per matrix (path, rate,
+  group count, receiver fan-out, bond), everything else held fixed.
 
 If two scenarios differ in more than the axis under test, the comparison is
 invalid — and the embedded env snapshots will show it.

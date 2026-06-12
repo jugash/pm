@@ -39,6 +39,17 @@ def kernel_scenario(**overrides) -> Scenario:
     return Scenario.from_dict(doc)
 
 
+def mcast_scenario(**overrides) -> Scenario:
+    doc = {
+        **BASE_SCENARIO,
+        "id": "mc-onload-test",
+        "multicast": {"group": "239.100.1.1", "port": 12000, "ttl": 1},
+        "tools": [{"name": "sockperf", "params": {"protocol": "udp", "msg_size": 64}}],
+    }
+    doc.update(overrides)
+    return Scenario.from_dict(doc)
+
+
 SFNT_OUTPUT = """\
 # version: sfnettest-1.5.0
 # server LD_PRELOAD=libonload.so
@@ -60,6 +71,14 @@ sockperf: ---> percentile 90.000 =    3.210
 sockperf: ---> percentile 50.000 =    2.341
 sockperf: ---> <MIN> observation =    1.987
 sockperf: # dropped messages = 0, # duplicated messages = 0, # out-of-order messages = 0
+"""
+
+SFNT_STREAM_OUTPUT = """\
+# version: sfnettest-1.5.0
+# server LD_PRELOAD=libonload.so
+#\tmps\tsend\trecv\tmean\tmin\tmedian\tmax\t%ile\tstddev
+\t10000\t10000\t10000\t2500\t2300\t2480\t9000\t2900\t80
+\t100000\t100000\t99998\t2600\t2310\t2550\t12000\t3100\t120
 """
 
 NETPERF_OUTPUT = """\

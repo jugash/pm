@@ -35,12 +35,20 @@ from perfbench.tools.base import ToolAdapter, create_tool
 
 @dataclass
 class ToolPlan:
-    """Resolved commands for one tool within a scenario."""
+    """Resolved commands for one tool within a scenario.
+
+    ``server_commands`` usually holds one entry; multicast fan-out scenarios
+    (``multicast.receivers`` > 1) start one receiver process per entry.
+    """
 
     adapter: ToolAdapter
-    server_command: Optional[str]
+    server_commands: tuple[str, ...]
     client_command: str
     timeout_s: float
+
+    @property
+    def server_command(self) -> Optional[str]:
+        return self.server_commands[0] if self.server_commands else None
 
 
 @dataclass
@@ -66,10 +74,13 @@ class Orchestrator:
         plans = []
         for spec in scenario.tools:
             adapter = create_tool(spec)
+            server_commands = tuple(
+                c for c in adapter.server_commands(server_scenario) if c
+            )
             plans.append(
                 ToolPlan(
                     adapter=adapter,
-                    server_command=adapter.server_command(server_scenario),
+                    server_commands=server_commands,
                     client_command=adapter.client_command(scenario, self.server_address),
                     timeout_s=adapter.timeout_s(),
                 )
@@ -154,17 +165,20 @@ class Orchestrator:
         tool_run = ToolRun(
             tool=plan.adapter.name,
             client_command=plan.client_command,
-            server_command=plan.server_command,
+            server_command="\n".join(plan.server_commands) or None,
         )
-        background = None
-        if plan.server_command:
-            background = self.server.start(plan.server_command)
+        backgrounds = [self.server.start(c) for c in plan.server_commands]
+        if backgrounds:
             self.sleep(self.settle_s)
-            if not background.running():
-                # server died during settle (port in use, missing binary,
+            dead = next((b for b in backgrounds if not b.running()), None)
+            if dead is not None:
+                # a server died during settle (port in use, missing binary,
                 # onload failure...) — fail with ITS error, not the client's
                 # confusing "connection refused"
-                server_result = background.stop()
+                server_result = dead.stop()
+                for b in backgrounds:
+                    if b is not dead and b.running():
+                        b.stop()
                 detail = (server_result.stderr or server_result.stdout).strip()[:300]
                 tool_run.exit_code = server_result.exit_code or 1
                 tool_run.error = (
@@ -178,9 +192,9 @@ class Orchestrator:
         tool_run.exit_code = result.exit_code
         tool_run.duration_s = result.duration_s
 
-        if background is not None:
+        for background in backgrounds:
             server_result = background.stop()
-            if not result.ok and server_result.stderr:
+            if not result.ok and server_result.stderr and not tool_run.error:
                 tool_run.error = (
                     f"client rc={result.exit_code}; server stderr: "
                     f"{server_result.stderr.strip()[:500]}"
@@ -219,4 +233,8 @@ class Orchestrator:
         """Attach scenario protocol-agnostic context labels where missing."""
         for m in measurements:
             m.labels.setdefault("interface", scenario.nic.interface)
+            if scenario.multicast is not None:
+                m.labels.setdefault("mcast_group", scenario.multicast.group)
+                m.labels.setdefault("mcast_groups", str(scenario.multicast.group_count))
+                m.labels.setdefault("mcast_receivers", str(scenario.multicast.receivers))
         return measurements

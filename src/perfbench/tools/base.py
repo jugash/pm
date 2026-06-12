@@ -86,6 +86,15 @@ class ToolAdapter(abc.ABC):
     def server_command(self, scenario: Scenario) -> Optional[str]:
         """Server-side command, or None for client-only tools."""
 
+    def server_commands(self, scenario: Scenario) -> list[Optional[str]]:
+        """All server-side commands for the scenario.
+
+        One entry by default. Multicast-capable adapters override this to
+        start ``scenario.multicast.receivers`` receiver processes (fan-out),
+        each pinned to its own core.
+        """
+        return [self.server_command(scenario)]
+
     @abc.abstractmethod
     def client_command(self, scenario: Scenario, server_address: str) -> str:
         """Client-side command line."""
@@ -107,7 +116,13 @@ class ToolAdapter(abc.ABC):
 
     def wrap(self, command: str, scenario: Scenario, role: str) -> str:
         """Apply core pinning and (for network tools) Onload wrapping."""
-        cores = scenario.cpu.cores_for_role(role)
+        return self.wrap_cores(command, scenario, scenario.cpu.cores_for_role(role))
+
+    def wrap_cores(
+        self, command: str, scenario: Scenario, cores: Sequence[int]
+    ) -> str:
+        """Like :meth:`wrap` but pinning an explicit core set (fan-out
+        receivers get one core each rather than the whole role set)."""
         prefix = taskset_prefix(cores)
         if self.uses_network:
             prefix += onload_prefix(scenario)

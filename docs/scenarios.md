@@ -33,6 +33,12 @@ scenarios:
       env:                      # EF_* environment, stringified
         EF_POLL_USEC: "100000"
         EF_INT_DRIVEN: "0"
+    multicast:                  # optional: multicast traffic shape
+      group: 239.100.1.1        # base IPv4 group (must be 224.0.0.0/4)
+      port: 12000
+      ttl: 1
+      group_count: 1            # >1: subscribe N consecutive groups (fan-in)
+      receivers: 1              # >1: N receiver processes, same group (fan-out)
     tools:                      # >= 1; shorthand string form allowed
       - name: sockperf
         params: { mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
@@ -40,6 +46,17 @@ scenarios:
     repetitions: 5              # >= 1, one RunRecord each
     tags: [core-comparison]
 ```
+
+**Multicast.** A `multicast:` block switches multicast-aware tools
+(`sockperf`, `sfnt-stream`) from unicast to group traffic; their
+`params.protocol` must be `udp`. `group_count` sweeps fan-in (consecutive
+groups from `group` — the load-time check rejects counts that run past
+239.255.255.255), `receivers` sweeps fan-out (one receiver process per
+core, round-robin over `cpu.server_cores` — size that list accordingly).
+Measurements from multicast scenarios are stamped with `mcast_group`,
+`mcast_groups`, `mcast_receivers` labels. See
+`scenarios/multicast-matrix.yaml` for kernel-vs-Onload, rate-sweep,
+fan-in, fan-out, and bond matrices.
 
 **Don't trust interface names.** `ens1f0` on one machine is `enp59s0f0` on
 another, and predictable names can drift after BIOS/firmware changes. Two

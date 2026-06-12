@@ -8,6 +8,7 @@ invalid input.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -268,6 +269,64 @@ class OnloadTuning:
 
 
 @dataclass(frozen=True)
+class MulticastSpec:
+    """Multicast traffic shape for a scenario.
+
+    ``group`` is the base IPv4 group; ``group_count`` > 1 subscribes to that
+    many *consecutive* groups (fan-in: filter-table and demux cost).
+    ``receivers`` > 1 starts that many receiver processes on the server host
+    all joined to the same group (fan-out: per-socket delivery cost).
+    """
+
+    group: str = "239.100.1.1"
+    port: int = 12000
+    ttl: int = 1
+    group_count: int = 1
+    receivers: int = 1
+
+    @classmethod
+    def from_dict(cls, data: Any, path: str = "multicast") -> "MulticastSpec":
+        data = _expect_mapping(data, path)
+        _reject_unknown(data, {"group", "port", "ttl", "group_count", "receivers"}, path)
+        group = str(data.get("group", cls.group))
+        try:
+            addr = ipaddress.IPv4Address(group)
+        except ipaddress.AddressValueError:
+            raise SchemaError(f"{path}.group", f"invalid IPv4 address {group!r}") from None
+        if not addr.is_multicast:
+            raise SchemaError(
+                f"{path}.group",
+                f"{group} is not a multicast address (224.0.0.0/4)",
+            )
+        port = _expect_int(data.get("port", cls.port), f"{path}.port", minimum=1)
+        if port > 65535:
+            raise SchemaError(f"{path}.port", f"expected <= 65535, got {port}")
+        ttl = _expect_int(data.get("ttl", cls.ttl), f"{path}.ttl", minimum=1)
+        if ttl > 255:
+            raise SchemaError(f"{path}.ttl", f"expected <= 255, got {ttl}")
+        group_count = _expect_int(
+            data.get("group_count", cls.group_count), f"{path}.group_count", minimum=1
+        )
+        last = ipaddress.IPv4Address(int(addr) + group_count - 1)
+        if not last.is_multicast:
+            raise SchemaError(
+                f"{path}.group_count",
+                f"{group} + {group_count} groups runs past the multicast range",
+            )
+        receivers = _expect_int(
+            data.get("receivers", cls.receivers), f"{path}.receivers", minimum=1
+        )
+        return cls(
+            group=group, port=port, ttl=ttl, group_count=group_count, receivers=receivers
+        )
+
+    def groups(self) -> tuple[str, ...]:
+        """The consecutive group addresses subscribed to."""
+        base = int(ipaddress.IPv4Address(self.group))
+        return tuple(str(ipaddress.IPv4Address(base + i)) for i in range(self.group_count))
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """A benchmark tool invocation with tool-specific parameters."""
 
@@ -299,13 +358,14 @@ class Scenario:
     cpu: CpuLayout
     tools: tuple[ToolSpec, ...]
     onload: Optional[OnloadTuning] = None
+    multicast: Optional[MulticastSpec] = None
     description: str = ""
     repetitions: int = 3
     tags: tuple[str, ...] = ()
 
     KNOWN_KEYS = {
         "id", "platform", "network_path", "nic", "cpu", "tools",
-        "onload", "description", "repetitions", "tags",
+        "onload", "multicast", "description", "repetitions", "tags",
     }
 
     @classmethod
@@ -341,6 +401,10 @@ class Scenario:
         if network_path is NetworkPath.ONLOAD and onload is None:
             onload = OnloadTuning()
 
+        multicast = None
+        if data.get("multicast") is not None:
+            multicast = MulticastSpec.from_dict(data["multicast"], f"{path}.multicast")
+
         # name-free ports need something to resolve by: an exact PCI address,
         # or a vendor to match (explicit, or the Solarflare default implied
         # by a kernel-bypass network path)
@@ -366,6 +430,7 @@ class Scenario:
             cpu=cpu,
             tools=tools,
             onload=onload,
+            multicast=multicast,
             description=str(data.get("description", "")),
             repetitions=repetitions,
             tags=tags,

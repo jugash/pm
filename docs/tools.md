@@ -6,7 +6,7 @@ measurements. Time is always nanoseconds; latency distributions use the
 `quantile` label (`0`=min, `0.5`=median, …, `1`=max).
 
 Install sources: `iperf3`, `netperf`, `sockperf`, `rt-tests` (cyclictest)
-from distro packages; `sfnt-pingpong` from
+from distro packages; `sfnt-pingpong` and `sfnt-stream` from
 [cns-sfnettest](https://github.com/Xilinx-CNS/cns-sfnettest); `sysjitter`
 from [Xilinx-CNS/sysjitter](https://github.com/Xilinx-CNS/sysjitter);
 `eflatency` ships with OpenOnload. `deploy/docker/Dockerfile.bench` builds
@@ -39,9 +39,46 @@ Emits per `msg_size`: `latency_ns` (q 0/0.5/0.99/1), `latency_mean_ns`,
 | `port` | 11111 | |
 
 Emits `latency_ns` for the full percentile ladder sockperf prints
-(p25…p99.999 plus min/max), `latency_mean_ns`, `messages_dropped_count`.
-Labels: `msg_size`, `mode`. Run several scenarios at increasing `mps` to map
-the latency/throughput knee.
+(p25…p99.999 plus min/max), `latency_mean_ns`, `messages_dropped_count`,
+`messages_duplicated_count`. Labels: `msg_size`, `mode`. Run several
+scenarios at increasing `mps` to map the latency/throughput knee.
+
+**Multicast:** when the scenario carries a `multicast:` block, `-i` becomes
+the group address on both sides and `params.protocol` must be `udp` (the
+adapter rejects tcp). `multicast.group_count > 1` generates a sockperf feed
+file (`U:group:port` per line, path via `feed_file` param) instead of
+`-i/-p`. `multicast.receivers > 1` starts that many `sockperf server`
+processes joined to the same group, each pinned round-robin to one core
+from `cpu.server_cores`; the client measures RTT to the *first* reflected
+reply and counts the rest in `messages_duplicated_count` — expect roughly
+`(receivers - 1) × messages` duplicates when fan-out delivery is healthy.
+`mc_rx_if` / `mc_tx_if` params (interface **IP**, not name) pass through to
+`--mc-rx-if` / `--mc-tx-if` for hosts with multiple routes to the group;
+the client always sends `--mc-ttl <multicast.ttl>`.
+
+## sfnt-stream — multicast streaming latency vs rate
+
+The canonical Onload multicast benchmark: one-way streaming latency swept
+across message rates in a single invocation. With a `multicast:` block the
+client adds `--mcast=<group> --mcastintf=<interface>`; without one it runs
+unicast UDP.
+
+| param | default | meaning |
+|---|---|---|
+| `protocol` | udp | must be udp with multicast |
+| `msg_size` | 64 | one size per invocation |
+| `rates` | [10000, 1000000, 100000] | `[min, max, step]` mps → `--rates=min-max+step` |
+| `duration_s` | 10 | per rate step (`--maxms`) |
+| `spin` | true | `--spin` busy-wait |
+
+Emits per achieved rate (label `mps`): `latency_ns` (q 0/0.5/0.99/1),
+`latency_mean_ns`, `latency_stddev_ns`, and `messages_dropped_count`
+(send − recv) when both columns are present.
+
+**Caveat:** like eflatency, sfnt-stream's output has varied across
+sfnettest releases. The parser is header-driven (reads the `#` column-name
+comment, needs at least `mean` and `median`); run it once by hand and check
+`results/raw/<run>-sfnt-stream.out` parses for your version.
 
 ## netperf — TCP_RR/UDP_RR cross-check
 
