@@ -94,10 +94,11 @@ in every run record.
 ```
 perfbench preflight scenarios/ -s bm-onload-pp --transport ssh \
     --client-host trader-a --ssh-user bench
-perfbench run scenarios/ -s baremetal-cpu-isolation ...   # sysjitter+cyclictest
+perfbench run scenarios/ -s baremetal-cpu-isolation ...   # sysjitter
 ```
 
 On a well-tuned host, sysjitter p99.9 < 10 µs with < 10 interruptions/s per
-isolated core, and cyclictest max < 30 µs. Fix the substrate before
+isolated core (plus cyclictest max < 30 µs where it's installed — it's
+optional, see docs/tools.md). Fix the substrate before
 measuring the network — network tail latency on a jittery host measures the
 host, not the network.

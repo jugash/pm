@@ -16,7 +16,7 @@ FROM registry.access.redhat.com/ubi9/ubi:latest
 
 RUN dnf install -y --setopt=install_weak_deps=0 \
         gcc gcc-c++ make git automake autoconf libtool \
-        ethtool iproute wget tar ca-certificates numactl-libs \
+        ethtool iproute wget tar ca-certificates \
     && dnf clean all
 
 # iperf3 (source build; replace with `dnf install iperf3` on entitled builds)
@@ -34,12 +34,17 @@ RUN git clone --depth 1 https://github.com/Mellanox/sockperf /tmp/sockperf \
     && cd /tmp/sockperf && ./autogen.sh && ./configure --prefix=/usr/local \
     && make -j && make install && rm -rf /tmp/sockperf
 
-# rt-tests (cyclictest) — needs numactl-devel; source build fallback
-RUN dnf install -y numactl-devel 2>/dev/null || true; \
-    git clone --depth 1 https://git.kernel.org/pub/scm/utils/rt-tests/rt-tests.git /tmp/rt-tests \
-    && make -C /tmp/rt-tests cyclictest \
-    && install /tmp/rt-tests/cyclictest /usr/local/bin/ \
-    && rm -rf /tmp/rt-tests
+# rt-tests (cyclictest) — OPTIONAL. Needs numactl-devel and git.kernel.org,
+# neither of which airgapped builds can reach; the build continues without
+# it and the harness relies on sysjitter for the OS-jitter gate (scenarios
+# no longer include cyclictest by default — add it back where available).
+# On entitled/mirrored builds prefer simply: dnf install rt-tests
+RUN ( dnf install -y numactl-libs numactl-devel \
+      && git clone --depth 1 https://git.kernel.org/pub/scm/utils/rt-tests/rt-tests.git /tmp/rt-tests \
+      && make -C /tmp/rt-tests cyclictest \
+      && install /tmp/rt-tests/cyclictest /usr/local/bin/ ) \
+    || echo "WARNING: cyclictest not built (offline build?); continuing without it"; \
+    rm -rf /tmp/rt-tests
 
 # sfnettest (sfnt-pingpong) and sysjitter (Solarflare/AMD)
 RUN git clone --depth 1 https://github.com/Xilinx-CNS/cns-sfnettest /tmp/sfnettest \

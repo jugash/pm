@@ -7,7 +7,9 @@ release", "decide bond layout", "validate the k8s platform").
 
 1. Tune both hosts per [host-tuning.md](host-tuning.md); reboot.
 2. Install tools on both hosts (or use the bench container image):
-   `iperf3 netperf sockperf rt-tests` + sfnt-pingpong + sysjitter (+ Onload).
+   `iperf3 netperf sockperf` + sfnt-pingpong/sfnt-stream + sysjitter
+   (+ Onload). `rt-tests` (cyclictest) is optional — skip it where
+   git.kernel.org / numactl-devel are unreachable.
 3. Deploy the exporter: `helm install perfbench deploy/helm/perfbench …`
    (see [kubernetes.md](kubernetes.md)); confirm Alloy is scraping:
    `curl http://exporter:9109/healthz`, then check
@@ -38,8 +40,9 @@ perfbench run scenarios/ -s baremetal-cpu-isolation \
 perfbench report --metric interruption_ns --quantile 0.999
 ```
 
-Gate: sysjitter p99.9 < 10 µs per isolated core, cyclictest max < 30 µs.
-Don't proceed past a failing gate — fix the host.
+Gate: sysjitter p99.9 < 10 µs per isolated core (plus cyclictest max
+< 30 µs where installed — it's optional). Don't proceed past a failing
+gate — fix the host.
 
 ## 2. Run the matrix
 

@@ -45,8 +45,10 @@ matrices:
       tools:
         - name: sysjitter
           params: { runtime_s: 30, threshold_ns: 200 }
-        - name: cyclictest
-          params: { duration_s: 30 }
+        # cyclictest is optional (rt-tests + numactl-devel are unreachable
+        # from airgapped builds). Uncomment where the binary is installed:
+        # - name: cyclictest
+        #   params: { duration_s: 30 }
       repetitions: 3
       tags: [cpu, jitter]
     axes:

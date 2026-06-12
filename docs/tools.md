@@ -103,11 +103,18 @@ working". Emits per `core`: `interruption_ns` (q 0/0.5/0.9/0.99/0.999/
 `interruptions_per_sec`, `interrupted_percent`. On a properly isolated
 core expect single-digit interruptions/s and p99.9 well under 10 µs.
 
-## cyclictest — scheduler wakeup latency (client-only)
+## cyclictest — scheduler wakeup latency (client-only, optional)
 
 `-q -m --priority=99`, one thread per scenario client core, `-a` affinity.
 Emits per `thread`: `wakeup_latency_ns` (q 0/1) and `wakeup_latency_mean_ns`.
 Values are µs in cyclictest output, normalized to ns.
+
+**Optional:** rt-tests needs `numactl-devel` and git.kernel.org (or an
+entitled `dnf install rt-tests`), which airgapped environments often can't
+reach. The bench image builds it best-effort and the shipped scenarios
+don't include it; sysjitter (single C file, no dependencies) is the
+primary OS-jitter gate. Add cyclictest back to scenarios where the binary
+exists — it cross-checks sysjitter from the scheduler's point of view.
 
 ## eflatency — raw ef_vi floor (efvi scenarios only)
 
