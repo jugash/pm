@@ -80,19 +80,43 @@ class Kubectl:
             raise ExecutionError(f"pod {pod} has no IP yet")
         return ip
 
-    def pod_network_ip(self, pod: str, network: str) -> str:
-        """IP on a secondary (Multus) network, from network-status annotation."""
+    def _annotation(self, pod: str, key: str) -> str:
+        escaped = key.replace(".", "\\.")
         result = self._run(
-            f"get pod {pod} -o jsonpath={{.metadata.annotations.k8s\\.v1\\.cni\\.cncf\\.io/network-status}}"
+            f"get pod {pod} -o jsonpath={{.metadata.annotations.{escaped}}}"
         )
+        return result.stdout.strip()
+
+    def pod_network_ip(self, pod: str, network: str) -> str:
+        """IP on a secondary (Multus) network, from the network-status
+        annotation (``networks-status`` fallback for older Multus)."""
+        raw = self._annotation(pod, "k8s.v1.cni.cncf.io/network-status")
+        if not raw:
+            raw = self._annotation(pod, "k8s.v1.cni.cncf.io/networks-status")
+        if not raw:
+            requested = self._annotation(pod, "k8s.v1.cni.cncf.io/networks")
+            raise ExecutionError(
+                f"pod {pod} has no Multus network-status annotation "
+                f"(networks requested: {requested or 'NONE'}). Multus did not "
+                f"attach the secondary network — check that the "
+                f"NetworkAttachmentDefinition {network!r} exists in namespace "
+                f"{self.namespace!r} (kubectl get net-attach-def -n "
+                f"{self.namespace}) and that Multus/SR-IOV operator is running."
+            )
         try:
-            statuses = json.loads(result.stdout)
+            statuses = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ExecutionError(f"cannot parse network-status for pod {pod}") from exc
+            raise ExecutionError(
+                f"cannot parse network-status for pod {pod}: {raw[:200]!r}"
+            ) from exc
         for status in statuses:
             if network in status.get("name", "") and status.get("ips"):
                 return status["ips"][0]
-        raise ExecutionError(f"pod {pod} has no IP on network {network}")
+        attached = [s.get("name", "?") for s in statuses]
+        raise ExecutionError(
+            f"pod {pod} has no IP on network {network!r}; attached networks: "
+            f"{attached}"
+        )
 
     def logs(self, pod: str) -> str:
         return self._run(f"logs {pod}").stdout

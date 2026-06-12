@@ -59,6 +59,36 @@ class TestKubectl(unittest.TestCase):
         with self.assertRaises(ExecutionError):
             k2.pod_network_ip("p", "x")
 
+    def test_pod_network_ip_old_multus_annotation_fallback(self):
+        # older Multus writes networks-status (plural); the new-key query
+        # returns empty and the fallback must find the IP
+        status = '[{"name": "perfbench/sriov-trading", "ips": ["192.168.10.5"]}]'
+        k, fake = _kubectl(
+            responses={"networks-status": ExecResult("", 0, stdout=status)}
+        )
+        self.assertEqual(k.pod_network_ip("p", "sriov-trading"), "192.168.10.5")
+        self.assertEqual(len(fake.calls), 2)
+
+    def test_pod_network_ip_missing_annotation_is_diagnostic(self):
+        # no annotation at all -> error explains what to check, including
+        # what (if anything) the pod requested
+        k, _ = _kubectl(
+            responses={"io/networks}": ExecResult("", 0, stdout="sriov-trading")}
+        )
+        with self.assertRaises(ExecutionError) as ctx:
+            k.pod_network_ip("p", "sriov-trading")
+        msg = str(ctx.exception)
+        self.assertIn("no Multus network-status annotation", msg)
+        self.assertIn("networks requested: sriov-trading", msg)
+        self.assertIn("net-attach-def", msg)
+
+    def test_pod_network_ip_wrong_network_lists_attached(self):
+        status = '[{"name": "perfbench/other-net", "ips": ["192.168.10.5"]}]'
+        k, _ = _kubectl(responses={"network-status": ExecResult("", 0, stdout=status)})
+        with self.assertRaises(ExecutionError) as ctx:
+            k.pod_network_ip("p", "sriov-trading")
+        self.assertIn("perfbench/other-net", str(ctx.exception))
+
 
 class TestPodExecutor(unittest.TestCase):
     def test_run_wraps_kubectl_exec(self):
