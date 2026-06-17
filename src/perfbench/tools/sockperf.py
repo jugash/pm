@@ -111,9 +111,8 @@ class Sockperf(ToolAdapter):
         if mc is None or mc.receivers <= 1:
             return [self.server_command(scenario)]
         prefix, command = self._server_body(scenario)
-        cores = scenario.cpu.server_cores
         return [
-            prefix + self.wrap_cores(command, scenario, (cores[i % len(cores)],))
+            prefix + self.wrap_fanout(command, scenario, i, role="server")
             for i in range(mc.receivers)
         ]
 

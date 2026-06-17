@@ -13,8 +13,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
-from perfbench.config.schema import NetworkPath, Scenario
+from perfbench.config.schema import NetworkPath, Platform, Scenario
 from perfbench.runner.base import Executor
+
+ISOLATED_CPUS_ENV = "ISOLATED_CPUS"
 
 SEV_FATAL = "fatal"
 SEV_WARNING = "warning"
@@ -117,10 +119,35 @@ def _tuned_isolated_cpus(executor: Executor) -> Optional[set[int]]:
     return parse_cpu_list(present.stdout) - housekeeping
 
 
+def _device_plugin_cores(executor: Executor) -> tuple[Optional[set[int]], str]:
+    """The cores the isolated-cpus device plugin actually handed this pod.
+
+    Reads ``$ISOLATED_CPUS`` from inside the pod. Returns (cores, raw) — cores
+    is None when the var is unset/empty (the plugin didn't inject it)."""
+    result = executor.run(f'printf %s "${ISOLATED_CPUS_ENV}"', timeout=10)
+    raw = result.stdout.strip() if result.ok else ""
+    if not raw:
+        return None, raw
+    return parse_cpu_list(raw), raw
+
+
 def check_isolation(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
-    needed = set(scenario.cpu.cores_for_role(role))
     if not scenario.cpu.require_isolated:
         return CheckResult("cpu_isolation", True, SEV_WARNING, "isolation check disabled")
+
+    if scenario.platform is Platform.K8S:
+        # Device-plugin model: the cores are whatever the plugin injected as
+        # ISOLATED_CPUS, not anything named in the scenario. Verify those.
+        needed, raw = _device_plugin_cores(executor)
+        if needed is None:
+            return CheckResult(
+                "cpu_isolation", False, SEV_FATAL,
+                f"${ISOLATED_CPUS_ENV} is unset/empty in the pod — the "
+                "isolated-cpus device plugin did not allocate cores (check the "
+                "plugin and that the pod requested its resource)",
+            )
+    else:
+        needed = set(scenario.cpu.cores_for_role(role))
     result = executor.run("cat /sys/devices/system/cpu/isolated", timeout=10)
     if not result.ok:
         return CheckResult(

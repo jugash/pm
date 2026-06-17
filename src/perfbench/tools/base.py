@@ -10,7 +10,7 @@ from __future__ import annotations
 import abc
 from typing import Any, ClassVar, Mapping, Optional, Sequence
 
-from perfbench.config.schema import NetworkPath, OnloadTuning, Scenario, ToolSpec
+from perfbench.config.schema import NetworkPath, OnloadTuning, Platform, Scenario, ToolSpec
 from perfbench.errors import SchemaError
 from perfbench.results.models import Measurement
 
@@ -37,16 +37,68 @@ def create_tool(spec: ToolSpec) -> "ToolAdapter":
     return cls(spec.params)
 
 
+# Environment variables injected into the pod by the device plugins (k8s).
+# The isolated-cpus plugin sets ISOLATED_CPUS to the comma-separated ids it
+# actually allocated; the onload plugin mounts the .so and sets ONLOAD_LIB to
+# its path. In device-plugin scenarios commands reference these at *runtime*
+# inside the pod rather than baking core ids / an onload wrapper at build time.
+ISOLATED_CPUS_ENV = "ISOLATED_CPUS"
+ONLOAD_LIB_ENV = "ONLOAD_LIB"
+
+
+def device_plugin(scenario: Scenario) -> bool:
+    """True when the scenario gets its CPUs/Onload from device plugins.
+
+    This is the k8s path: kubelet (via the plugins + Topology Manager) decides
+    which isolated cores and which Onload library the pod receives, so the
+    harness must read them from the pod's environment instead of from the
+    scenario file. Bare metal keeps using the explicit, statically-isolated
+    cores named in the scenario.
+    """
+    return scenario.platform is Platform.K8S
+
+
 def cores_arg(cores: Sequence[int]) -> str:
     return ",".join(str(c) for c in cores)
 
 
-def taskset_prefix(cores: Sequence[int]) -> str:
+def cores_spec(cores: Sequence[int], scenario: Optional[Scenario] = None) -> str:
+    """The cpu-list a tool should pin to, as a shell token.
+
+    Device-plugin scenarios resolve to the injected ``"$ISOLATED_CPUS"`` (kept
+    quoted so the value expands inside the pod, not on the harness host);
+    otherwise the explicit comma list."""
+    if scenario is not None and device_plugin(scenario):
+        return f'"${ISOLATED_CPUS_ENV}"'
+    return cores_arg(cores)
+
+
+def taskset_prefix(cores: Sequence[int], scenario: Optional[Scenario] = None) -> str:
+    if scenario is not None and device_plugin(scenario):
+        return f'taskset -c "${ISOLATED_CPUS_ENV}" '
     return f"taskset -c {cores_arg(cores)} " if cores else ""
 
 
+def taskset_nth_prefix(
+    index: int, count: int, scenario: Scenario, cores: Sequence[int]
+) -> str:
+    """Pin a fan-out worker (receiver ``index``) to a single core.
+
+    Bare metal cycles through the explicit ``cores``. Device-plugin scenarios
+    pick the ``index``-th id out of the injected ``ISOLATED_CPUS`` list at
+    runtime (``count`` is how many the pod requested, used to wrap the index)."""
+    if device_plugin(scenario):
+        field = (index % count) + 1 if count else 1
+        return f'taskset -c "$(echo "${ISOLATED_CPUS_ENV}" | cut -d, -f{field})" '
+    return taskset_prefix((cores[index % len(cores)],)) if cores else ""
+
+
 def onload_prefix(scenario: Scenario) -> str:
-    """``env EF_...=... onload --profile=X`` prefix for bypass scenarios."""
+    """Onload acceleration prefix for bypass scenarios.
+
+    Bare metal uses the ``onload --profile=X`` wrapper from the image.
+    Device-plugin (k8s) scenarios instead ``LD_PRELOAD`` the exact library the
+    onload plugin injected (``"$ONLOAD_LIB"``); the EF_* tuning still applies."""
     if scenario.network_path is not NetworkPath.ONLOAD:
         return ""
     tuning = scenario.onload or OnloadTuning()
@@ -54,6 +106,9 @@ def onload_prefix(scenario: Scenario) -> str:
     if tuning.env:
         assigns = " ".join(f"{k}={v}" for k, v in sorted(tuning.env.items()))
         parts.append(f"env {assigns}")
+    if device_plugin(scenario):
+        parts.append(f'LD_PRELOAD="${ONLOAD_LIB_ENV}"')
+        return " ".join(parts) + " "
     onload = "onload"
     if tuning.profile:
         onload += f" --profile={tuning.profile}"
@@ -123,7 +178,18 @@ class ToolAdapter(abc.ABC):
     ) -> str:
         """Like :meth:`wrap` but pinning an explicit core set (fan-out
         receivers get one core each rather than the whole role set)."""
-        prefix = taskset_prefix(cores)
+        prefix = taskset_prefix(cores, scenario)
+        if self.uses_network:
+            prefix += onload_prefix(scenario)
+        return prefix + command
+
+    def wrap_fanout(self, command: str, scenario: Scenario, index: int, role: str) -> str:
+        """Pin one fan-out worker (e.g. multicast receiver ``index``) to a
+        single core, then apply Onload wrapping as usual."""
+        prefix = taskset_nth_prefix(
+            index, scenario.cpu.request_count(role), scenario,
+            scenario.cpu.cores_for_role(role),
+        )
         if self.uses_network:
             prefix += onload_prefix(scenario)
         return prefix + command

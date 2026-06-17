@@ -10,9 +10,13 @@ Two pieces:
   running pod via ``kubectl exec``, letting the orchestrator treat pods
   exactly like SSH hosts.
 
-``render_benchmark_pod`` produces a Guaranteed-QoS pod manifest with the
-Multus network annotation, SR-IOV resource requests and the Onload device
-mounts needed for kernel-bypass benchmarking inside a container.
+``render_benchmark_pod`` produces a benchmark pod manifest with the Multus
+network annotation, the SR-IOV resource request, and — instead of statically
+isolated cores and hostPath Onload device mounts — *device-plugin* resource
+requests: an isolated-cpus resource (the plugin injects ``ISOLATED_CPUS``) and
+an onload resource (the plugin mounts ``/dev/onload``/``/dev/onload_epoll``,
+injects the library and sets ``ONLOAD_LIB``). The single-numa-node Topology
+Manager policy keeps the cores, the VF and the devices on one NUMA node.
 """
 
 from __future__ import annotations
@@ -28,6 +32,11 @@ from perfbench.config.schema import NetworkPath, Scenario
 from perfbench.errors import ExecutionError
 from perfbench.runner.base import BackgroundProcess, ExecResult, Executor
 from perfbench.runner.local import LocalExecutor
+
+# Default device-plugin resource names. Both are configurable (CLI flags /
+# Helm values) so they can match whatever the cluster's plugins advertise.
+DEFAULT_ISOLATED_CPUS_RESOURCE = "perfbench.io/isolated-cpus"
+DEFAULT_ONLOAD_RESOURCE = "perfbench.io/onload"
 
 
 def _networks_annotation(networks: Sequence[str], static_ip: Optional[str]) -> str:
@@ -290,6 +299,8 @@ class K8sBenchSession:
         ready_timeout_s: int = 180,
         client_ip: Optional[str] = None,
         server_ip: Optional[str] = None,
+        isolated_cpus_resource: str = DEFAULT_ISOLATED_CPUS_RESOURCE,
+        onload_resource: str = DEFAULT_ONLOAD_RESOURCE,
     ):
         self.kubectl = kubectl
         self.image = image
@@ -298,6 +309,8 @@ class K8sBenchSession:
         self.nodes = {"client": client_node, "server": server_node}
         self.hugepages_2mi = hugepages_2mi
         self.ready_timeout_s = ready_timeout_s
+        self.isolated_cpus_resource = isolated_cpus_resource
+        self.onload_resource = onload_resource
         # static IPs (CIDR form, e.g. 192.168.100.2/24) requested via the
         # Multus annotation on the first network; needs static-IPAM NAD
         self.static_ips = {"client": client_ip, "server": server_ip}
@@ -322,6 +335,8 @@ class K8sBenchSession:
                 hugepages_2mi=self.hugepages_2mi,
                 namespace=self.kubectl.namespace,
                 static_ip=self.static_ips[role],
+                isolated_cpus_resource=self.isolated_cpus_resource,
+                onload_resource=self.onload_resource,
             )
             self.kubectl.apply(manifest)
         for role in ("server", "client"):
@@ -411,23 +426,38 @@ def render_benchmark_pod(
     hugepages_2mi: str = "1Gi",
     namespace: str = "perfbench",
     static_ip: Optional[str] = None,
+    isolated_cpus_resource: str = DEFAULT_ISOLATED_CPUS_RESOURCE,
+    onload_resource: str = DEFAULT_ONLOAD_RESOURCE,
 ) -> str:
-    """Render a low-latency benchmark pod manifest.
+    """Render a low-latency benchmark pod manifest (device-plugin model).
 
-    Guaranteed QoS (requests == limits, integral CPUs) so kubelet's static
-    CPU manager grants exclusive cores; SR-IOV VF via Multus annotation
-    (optionally with a static ``ips`` request on the data-path network);
-    Onload device nodes mounted for kernel-bypass scenarios.
+    Exclusive cores and the Onload userland come from *device plugins* rather
+    than static config:
+
+    * ``<isolated_cpus_resource>: <N>`` — the plugin pins N isolated cores and
+      injects their ids as ``ISOLATED_CPUS`` (the harness ``taskset``\\s onto
+      that at runtime). N is ``scenario.cpu.request_count(role)``.
+    * ``<onload_resource>: 1`` (bypass scenarios) — the plugin mounts
+      ``/dev/onload``/``/dev/onload_epoll``, injects the library and sets
+      ``ONLOAD_LIB`` (the harness ``LD_PRELOAD``\\s it). No hostPath needed.
+
+    The integral ``cpu`` request is intentionally dropped: the isolated cores
+    are owned by the plugin (and ``isolcpus``), not kubelet's CPU manager, so
+    requesting both would double-count. ``memory`` requests==limits and the
+    single-numa-node Topology Manager keeps cores, VF and devices NUMA-aligned.
+    SR-IOV VF is attached via the Multus annotation (optionally a static
+    ``ips`` request on the data-path network).
     """
-    cores = scenario.cpu.cores_for_role(role)
-    cpu_count = str(len(cores))
+    isolated_count = str(scenario.cpu.request_count(role))
     resources: dict = {
-        "cpu": cpu_count,
+        isolated_cpus_resource: isolated_count,
         "memory": "2Gi",
         "hugepages-2Mi": hugepages_2mi,
     }
     if sriov_resource:
         resources[sriov_resource] = "1"
+    if scenario.network_path in (NetworkPath.ONLOAD, NetworkPath.EFVI):
+        resources[onload_resource] = "1"
 
     container: dict = {
         "name": "bench",
@@ -445,12 +475,6 @@ def render_benchmark_pod(
     volumes: list = [
         {"name": "hugepages", "emptyDir": {"medium": "HugePages"}},
     ]
-
-    if scenario.network_path in (NetworkPath.ONLOAD, NetworkPath.EFVI):
-        container["volumeMounts"].append({"name": "dev-onload", "mountPath": "/dev/onload"})
-        container["volumeMounts"].append({"name": "dev-sfc", "mountPath": "/dev/sfc_char"})
-        volumes.append({"name": "dev-onload", "hostPath": {"path": "/dev/onload"}})
-        volumes.append({"name": "dev-sfc", "hostPath": {"path": "/dev/sfc_char"}})
 
     metadata: dict = {
         "name": name,

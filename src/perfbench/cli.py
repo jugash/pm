@@ -28,6 +28,7 @@ from perfbench.report.summary import comparison_rows, format_table
 from perfbench.results.store import ResultStore
 from perfbench.runner.base import Executor
 from perfbench.runner.local import LocalExecutor
+from perfbench.runner.k8s import DEFAULT_ISOLATED_CPUS_RESOURCE, DEFAULT_ONLOAD_RESOURCE
 from perfbench.runner.orchestrator import Orchestrator
 import perfbench.tools  # noqa: F401  (registers adapters)
 
@@ -323,6 +324,13 @@ def _report_records(records, scenario_id, push_url):
               help="Static IP (CIDR, e.g. 192.168.100.2/24) for the server pod "
                    "on the first network; requires a static-IPAM NAD.")
 @click.option("--sriov-resource", default=None, help="e.g. amd.com/sfc_vf")
+@click.option("--isolated-cpus-resource", default=DEFAULT_ISOLATED_CPUS_RESOURCE,
+              show_default=True,
+              help="Device-plugin resource that allocates isolated CPUs and "
+                   "injects ISOLATED_CPUS.")
+@click.option("--onload-resource", default=DEFAULT_ONLOAD_RESOURCE, show_default=True,
+              help="Device-plugin resource that mounts the Onload devices and "
+                   "injects ONLOAD_LIB (bypass scenarios).")
 @click.option("--db", default="results/perfbench.sqlite", show_default=True)
 @click.option("--output-dir", default="results/raw", show_default=True)
 @click.option("--skip-preflight", is_flag=True)
@@ -331,14 +339,16 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--keep-pods", is_flag=True, help="Leave pods running for debugging.")
 def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
             server_node, networks, client_ip, server_ip, sriov_resource,
+            isolated_cpus_resource, onload_resource,
             db, output_dir, skip_preflight, settle, push_url, keep_pods):
     """Provision benchmark pods, run k8s scenarios end-to-end, tear down.
 
-    Fully self-contained: renders Guaranteed-QoS pods (SR-IOV VF, hugepages,
-    Onload devices for bypass scenarios), waits for readiness, resolves the
-    data-path address from the Multus network-status annotation, runs the
-    scenario through the same orchestrator as bare metal, then deletes the
-    pods. This is the command the Helm runner Job executes in-cluster.
+    Fully self-contained: renders pods that request isolated CPUs and (for
+    bypass scenarios) Onload from device plugins — plus the SR-IOV VF and
+    hugepages — waits for readiness, resolves the data-path address from the
+    Multus network-status annotation, runs the scenario through the same
+    orchestrator as bare metal, then deletes the pods. This is the command the
+    Helm runner Job executes in-cluster.
     """
     from perfbench.config.schema import Platform
     from perfbench.runner.k8s import K8sBenchSession
@@ -361,6 +371,8 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
         server_node=server_node,
         client_ip=client_ip,
         server_ip=server_ip,
+        isolated_cpus_resource=isolated_cpus_resource,
+        onload_resource=onload_resource,
     )
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     store = ResultStore(db)

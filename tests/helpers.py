@@ -39,6 +39,23 @@ def kernel_scenario(**overrides) -> Scenario:
     return Scenario.from_dict(doc)
 
 
+def k8s_scenario(**overrides) -> Scenario:
+    """A device-plugin (platform: k8s) onload scenario.
+
+    CPUs/Onload come from device plugins, so the cpu block uses ``count``
+    rather than naming cores; commands reference $ISOLATED_CPUS / $ONLOAD_LIB
+    at runtime.
+    """
+    doc = {
+        **BASE_SCENARIO,
+        "id": "k8s-onload-test",
+        "platform": "k8s",
+        "cpu": {"count": 2, "require_isolated": True},
+    }
+    doc.update(overrides)
+    return Scenario.from_dict(doc)
+
+
 def mcast_scenario(**overrides) -> Scenario:
     doc = {
         **BASE_SCENARIO,

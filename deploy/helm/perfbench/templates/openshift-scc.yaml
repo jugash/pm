@@ -1,8 +1,10 @@
 {{- if .Values.openshift.enabled }}
 # OpenShift SecurityContextConstraints for the benchmark pods: they need
 # NET_RAW/NET_ADMIN (raw sockets, interface config), IPC_LOCK (Onload shared
-# memory / hugepages), SYS_NICE (RT priorities for cyclictest), and hostPath
-# for /dev/onload + /dev/sfc_char in bypass scenarios.
+# memory / hugepages) and SYS_NICE (RT priorities for cyclictest). The Onload
+# device nodes are now provided by the onload device plugin (which mounts
+# /dev/onload + /dev/onload_epoll), so the benchmark pods no longer need
+# hostPath access.
 #
 # Cluster-scoped: installing this chart with openshift.enabled=true requires
 # cluster-admin (or pre-create the SCC and set openshift.enabled=false).
@@ -13,7 +15,7 @@ metadata:
   labels:
     {{- include "perfbench.labels" . | nindent 4 }}
 allowPrivilegedContainer: false
-allowHostDirVolumePlugin: true     # /dev/onload, /dev/sfc_char
+allowHostDirVolumePlugin: false    # devices come from the onload device plugin
 allowHostNetwork: false
 allowHostPID: false
 allowHostPorts: false
@@ -38,7 +40,6 @@ volumes:
   - configMap
   - downwardAPI
   - emptyDir
-  - hostPath
   - persistentVolumeClaim
   - projected
   - secret

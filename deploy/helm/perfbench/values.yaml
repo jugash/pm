@@ -103,6 +103,12 @@ runner:
   clientIp: ""            # e.g. 192.168.100.1/24
   serverIp: ""            # e.g. 192.168.100.2/24
   sriovResource: amd.com/sfc_vf
+  # Device-plugin resources the benchmark pods request. The isolated-cpus
+  # plugin injects ISOLATED_CPUS (taskset target); the onload plugin mounts
+  # /dev/onload + /dev/onload_epoll, injects the library and sets ONLOAD_LIB
+  # (LD_PRELOAD target). Match these to whatever your plugins advertise.
+  isolatedCpusResource: perfbench.io/isolated-cpus
+  onloadResource: perfbench.io/onload
   skipPreflight: false
   keepPods: false
   ttlSecondsAfterFinished: 86400
@@ -121,7 +127,7 @@ rbac:
   create: true
 
 # OpenShift Container Platform integration: SecurityContextConstraints
-# granting the benchmark pods their required capabilities and hostPath
-# device mounts. Requires cluster-admin to install.
+# granting the benchmark pods their required capabilities (Onload devices come
+# from the device plugin, so no hostPath). Requires cluster-admin to install.
 openshift:
   enabled: true

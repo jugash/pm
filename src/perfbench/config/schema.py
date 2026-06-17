@@ -194,29 +194,55 @@ class NicLayout:
 
 @dataclass(frozen=True)
 class CpuLayout:
-    """CPU pinning/isolation layout under test."""
+    """CPU pinning/isolation layout under test.
+
+    Two ways to say how many exclusive cores a role needs:
+
+    * explicit IDs (``client_cores``/``server_cores``) — required for the
+      ``baremetal`` platform, where the harness ``taskset``\\s onto those exact
+      isolated cores on the host;
+    * a ``count`` — the device-plugin path (k8s): the pod *requests* that many
+      isolated CPUs and the plugin injects the actual ids as ``ISOLATED_CPUS``
+      at runtime, so the scenario must not (and cannot) name them ahead of
+      time. When ``count`` is set the per-role core lists are optional.
+    """
 
     client_cores: tuple[int, ...]
     server_cores: tuple[int, ...]
     irq_cores: tuple[int, ...] = ()
     numa_node: Optional[int] = None
     require_isolated: bool = True
+    count: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: Any, path: str = "cpu") -> "CpuLayout":
         data = _expect_mapping(data, path)
         _reject_unknown(
             data,
-            {"client_cores", "server_cores", "irq_cores", "numa_node", "require_isolated"},
+            {"client_cores", "server_cores", "irq_cores", "numa_node",
+             "require_isolated", "count"},
             path,
         )
         client = _int_tuple(data.get("client_cores", []), f"{path}.client_cores")
         server = _int_tuple(data.get("server_cores", []), f"{path}.server_cores")
         irq = _int_tuple(data.get("irq_cores", []), f"{path}.irq_cores")
-        if not client:
-            raise SchemaError(f"{path}.client_cores", "at least one core is required")
-        if not server:
-            raise SchemaError(f"{path}.server_cores", "at least one core is required")
+        count = data.get("count")
+        if count is not None:
+            count = _expect_int(count, f"{path}.count", minimum=1)
+        # Either name the cores explicitly, or request a count (device plugin).
+        if count is None:
+            if not client:
+                raise SchemaError(
+                    f"{path}.client_cores",
+                    "at least one core is required (or set cpu.count to request "
+                    "isolated CPUs from a device plugin)",
+                )
+            if not server:
+                raise SchemaError(
+                    f"{path}.server_cores",
+                    "at least one core is required (or set cpu.count to request "
+                    "isolated CPUs from a device plugin)",
+                )
         overlap = set(client) & set(irq)
         if overlap:
             raise SchemaError(
@@ -235,6 +261,7 @@ class CpuLayout:
             irq_cores=irq,
             numa_node=numa,
             require_isolated=require_isolated,
+            count=count,
         )
 
     def cores_for_role(self, role: str) -> tuple[int, ...]:
@@ -243,6 +270,17 @@ class CpuLayout:
         if role == "server":
             return self.server_cores
         raise ValueError(f"unknown role: {role}")
+
+    def request_count(self, role: str) -> int:
+        """How many exclusive/isolated CPUs this role needs.
+
+        ``count`` wins when set (device-plugin request); otherwise it is the
+        number of explicitly named cores. This is what sizes the pod's
+        isolated-cpus resource request and the thread counts of CPU tools.
+        """
+        if self.count is not None:
+            return self.count
+        return len(self.cores_for_role(role))
 
 
 @dataclass(frozen=True)

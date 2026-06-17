@@ -22,7 +22,7 @@ from typing import Optional
 from perfbench.config.schema import Scenario
 from perfbench.errors import ParseError
 from perfbench.results.models import Measurement
-from perfbench.tools.base import ToolAdapter, cores_arg, register
+from perfbench.tools.base import ToolAdapter, cores_spec, register
 
 # row key -> (metric, unit, extra labels)
 _ROW_METRICS: dict[str, tuple[str, str, dict[str, str]]] = {
@@ -58,7 +58,7 @@ class Sysjitter(ToolAdapter):
         cores = scenario.cpu.client_cores
         return (
             f"{self.params['binary']} --runtime {self.params['runtime_s']} "
-            f"--cores {cores_arg(cores)} {self.params['threshold_ns']}"
+            f"--cores {cores_spec(cores, scenario)} {self.params['threshold_ns']}"
         )
 
     def timeout_s(self) -> float:

@@ -56,14 +56,14 @@ class Eflatency(ToolAdapter):
     def server_command(self, scenario: Scenario) -> Optional[str]:
         self._check_path(scenario)
         return (
-            taskset_prefix(scenario.cpu.server_cores)
+            taskset_prefix(scenario.cpu.server_cores, scenario)
             + f"{self.params['binary']} pong {scenario.nic.interface}"
         )
 
     def client_command(self, scenario: Scenario, server_address: str) -> str:
         self._check_path(scenario)
         return (
-            taskset_prefix(scenario.cpu.client_cores)
+            taskset_prefix(scenario.cpu.client_cores, scenario)
             + f"{self.params['binary']} -n {self.params['iterations']} "
             + f"ping {scenario.nic.interface}"
         )

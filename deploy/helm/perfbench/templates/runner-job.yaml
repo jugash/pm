@@ -51,6 +51,12 @@ spec:
             {{- if .Values.runner.sriovResource }}
             - --sriov-resource={{ .Values.runner.sriovResource }}
             {{- end }}
+            {{- if .Values.runner.isolatedCpusResource }}
+            - --isolated-cpus-resource={{ .Values.runner.isolatedCpusResource }}
+            {{- end }}
+            {{- if .Values.runner.onloadResource }}
+            - --onload-resource={{ .Values.runner.onloadResource }}
+            {{- end }}
             {{- if .Values.runner.skipPreflight }}
             - --skip-preflight
             {{- end }}

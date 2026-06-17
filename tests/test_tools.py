@@ -13,6 +13,7 @@ from tests.helpers import (
     SFNT_OUTPUT,
     SOCKPERF_OUTPUT,
     SYSJITTER_OUTPUT,
+    k8s_scenario,
     kernel_scenario,
     make_scenario,
 )
@@ -74,6 +75,49 @@ class TestWrapping(unittest.TestCase):
     def test_cpu_tools_not_onload_wrapped(self):
         cmd = _tool("cyclictest").client_command(make_scenario(), "10.0.0.2")
         self.assertNotIn("onload", cmd)
+
+    # -- device-plugin (k8s) wrapping --------------------------------------
+
+    def test_taskset_uses_isolated_cpus_env_for_k8s(self):
+        # ids in the scenario are ignored: the pod taskset's onto whatever the
+        # device plugin injected as $ISOLATED_CPUS
+        self.assertEqual(
+            taskset_prefix((2, 4), k8s_scenario()), 'taskset -c "$ISOLATED_CPUS" '
+        )
+
+    def test_onload_prefix_ld_preloads_injected_lib_for_k8s(self):
+        prefix = onload_prefix(k8s_scenario())
+        self.assertEqual(prefix, 'env EF_POLL_USEC=100000 LD_PRELOAD="$ONLOAD_LIB" ')
+        self.assertNotIn("--profile", prefix)
+
+    def test_client_command_k8s_uses_runtime_env(self):
+        cmd = _tool("sockperf").client_command(k8s_scenario(), "10.0.0.2")
+        self.assertEqual(
+            cmd,
+            'taskset -c "$ISOLATED_CPUS" env EF_POLL_USEC=100000 '
+            'LD_PRELOAD="$ONLOAD_LIB" '
+            "sockperf ping-pong -i 10.0.0.2 -p 11111 -m 64 -t 10 --tcp",
+        )
+
+    def test_sysjitter_cores_from_isolated_cpus_for_k8s(self):
+        cmd = _tool("sysjitter").client_command(k8s_scenario(), "")
+        self.assertIn('--cores "$ISOLATED_CPUS"', cmd)
+
+    def test_cyclictest_affinity_from_isolated_cpus_for_k8s(self):
+        # thread count comes from the requested count (2), affinity from env
+        cmd = _tool("cyclictest").client_command(k8s_scenario(), "")
+        self.assertIn("-t 2 ", cmd)
+        self.assertIn('-a "$ISOLATED_CPUS"', cmd)
+
+    def test_mcast_fanout_pins_receivers_from_isolated_cpus_for_k8s(self):
+        sc = k8s_scenario(
+            multicast={"group": "239.1.1.1", "port": 12000, "receivers": 2},
+            tools=[{"name": "sockperf", "params": {"protocol": "udp"}}],
+        )
+        cmds = _tool("sockperf", protocol="udp").server_commands(sc)
+        self.assertEqual(len(cmds), 2)
+        self.assertIn('cut -d, -f1', cmds[0])
+        self.assertIn('cut -d, -f2', cmds[1])
 
     def test_timeout_default_and_explicit(self):
         self.assertEqual(_tool("sockperf", duration_s=10).timeout_s(), 70.0)

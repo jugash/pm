@@ -61,6 +61,11 @@ def check_node_tuned(executor: Executor, scenario: Scenario, role: str) -> Check
 def check_nic_irq_affinity(executor: Executor, scenario: Scenario, role: str) -> CheckResult:
     bench_cores = set(scenario.cpu.cores_for_role(role))
     irq_cores = set(scenario.cpu.irq_cores)
+    # Device-plugin scenarios don't name their cores: the plugin assigns them
+    # when the (not-yet-created) benchmark pod is scheduled, so this node-level
+    # check can only verify IRQ steering against the declared irq_cores, not
+    # overlap with the as-yet-unknown benchmark cores.
+    dynamic_cores = not bench_cores and scenario.cpu.count is not None
     problems: list[str] = []
     found_any = False
 
@@ -117,6 +122,15 @@ def check_nic_irq_affinity(executor: Executor, scenario: Scenario, role: str) ->
             passed=False,
             severity=SEV_WARNING,
             message="no NIC IRQs found for any scenario port",
+        )
+    if dynamic_cores:
+        return CheckResult(
+            name="nic_irq_affinity",
+            passed=True,
+            severity=SEV_WARNING,
+            message="NIC IRQ steering looks sane; benchmark cores are assigned "
+            "by the device plugin at schedule time, so overlap is re-checked "
+            "in-pod against $ISOLATED_CPUS",
         )
     return CheckResult(
         name="nic_irq_affinity",

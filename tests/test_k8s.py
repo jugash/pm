@@ -321,23 +321,47 @@ class TestRenderBenchmarkPod(unittest.TestCase):
             pod["metadata"]["annotations"]["k8s.v1.cni.cncf.io/networks"], "sriov-trading"
         )
         container = pod["spec"]["containers"][0]
-        # Guaranteed QoS: requests == limits, integral cpu = len(client_cores)
-        self.assertEqual(container["resources"]["requests"]["cpu"], "2")
-        self.assertEqual(container["resources"]["requests"], container["resources"]["limits"])
-        self.assertEqual(container["resources"]["limits"]["intel.com/sriov_sfc"], "1")
+        requests = container["resources"]["requests"]
+        # device-plugin model: isolated CPUs requested as a resource (count =
+        # len(client_cores)=2), no integral cpu request, onload device plugin
+        self.assertEqual(requests["perfbench.io/isolated-cpus"], "2")
+        self.assertNotIn("cpu", requests)
+        self.assertEqual(requests, container["resources"]["limits"])
+        self.assertEqual(requests["intel.com/sriov_sfc"], "1")
+        self.assertEqual(requests["perfbench.io/onload"], "1")
+        # devices come from the plugin now, not hostPath mounts/volumes
         mounts = {m["mountPath"] for m in container["volumeMounts"]}
-        self.assertIn("/dev/onload", mounts)
+        self.assertNotIn("/dev/onload", mounts)
+        self.assertNotIn("hostPath", yaml.safe_dump(pod["spec"]["volumes"]))
         self.assertEqual(pod["spec"]["nodeName"], "worker-1")
         caps = container["securityContext"]["capabilities"]["add"]
         self.assertIn("NET_RAW", caps)
 
-    def test_kernel_pod_has_no_onload_devices(self):
+    def test_resource_names_are_configurable(self):
+        text = render_benchmark_pod(
+            name="c", scenario=make_scenario(), role="server", image="img",
+            isolated_cpus_resource="amd.com/isolated_cpus",
+            onload_resource="amd.com/onload",
+        )
+        requests = yaml.safe_load(text)["spec"]["containers"][0]["resources"]["requests"]
+        self.assertIn("amd.com/isolated_cpus", requests)
+        self.assertEqual(requests["amd.com/onload"], "1")
+
+    def test_count_sizes_the_isolated_cpus_request(self):
+        # cpu.count drives the request when no explicit cores are named
+        sc = make_scenario(cpu={"count": 4, "require_isolated": True})
+        text = render_benchmark_pod(name="c", scenario=sc, role="client", image="img")
+        requests = yaml.safe_load(text)["spec"]["containers"][0]["resources"]["requests"]
+        self.assertEqual(requests["perfbench.io/isolated-cpus"], "4")
+
+    def test_kernel_pod_has_no_onload_resource(self):
         text = render_benchmark_pod(
             name="b", scenario=kernel_scenario(), role="server", image="img"
         )
         pod = yaml.safe_load(text)
-        mounts = {m["mountPath"] for m in pod["spec"]["containers"][0]["volumeMounts"]}
-        self.assertNotIn("/dev/onload", mounts)
+        requests = pod["spec"]["containers"][0]["resources"]["requests"]
+        self.assertNotIn("perfbench.io/onload", requests)
+        self.assertIn("perfbench.io/isolated-cpus", requests)
         self.assertNotIn("annotations", pod["metadata"])
         self.assertNotIn("nodeName", pod["spec"])
 

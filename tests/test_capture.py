@@ -3,13 +3,14 @@ import unittest
 from perfbench.capture.envsnapshot import collect_environment
 from perfbench.capture.preflight import (
     SEV_FATAL,
+    check_isolation,
     fatal_failures,
     parse_cpu_list,
     parse_cpu_mask,
     run_preflight,
 )
 from perfbench.runner.base import ExecResult, FakeExecutor
-from tests.helpers import kernel_scenario, make_scenario
+from tests.helpers import k8s_scenario, kernel_scenario, make_scenario
 
 
 def _ok(stdout: str) -> ExecResult:
@@ -90,6 +91,36 @@ class TestPreflight(unittest.TestCase):
         responses["isolated"] = _fail("no such file")
         fatals = fatal_failures(run_preflight(FakeExecutor(responses=responses), make_scenario()))
         self.assertEqual([f.name for f in fatals], ["cpu_isolation"])
+
+    def test_k8s_isolation_reads_injected_isolated_cpus(self):
+        # device-plugin scenario: check verifies $ISOLATED_CPUS, not the
+        # (absent) scenario cores, against the node's isolated set
+        executor = FakeExecutor(responses={
+            '$ISOLATED_CPUS': _ok("2,4"),
+            "isolated": _ok("2,4,6"),
+        })
+        check = check_isolation(executor, k8s_scenario(), role="client")
+        self.assertTrue(check.passed)
+
+    def test_k8s_isolation_fatal_when_env_missing(self):
+        # plugin didn't inject the var -> fatal, with a pointed message
+        executor = FakeExecutor(responses={
+            '$ISOLATED_CPUS': _ok(""),
+            "isolated": _ok("2,4,6"),
+        })
+        check = check_isolation(executor, k8s_scenario(), role="client")
+        self.assertFalse(check.passed)
+        self.assertEqual(check.severity, SEV_FATAL)
+        self.assertIn("ISOLATED_CPUS", check.message)
+
+    def test_k8s_isolation_fatal_when_core_not_isolated(self):
+        executor = FakeExecutor(responses={
+            '$ISOLATED_CPUS': _ok("2,5"),  # 5 not in node isolated set
+            "isolated": _ok("2,4,6"),
+        })
+        check = check_isolation(executor, k8s_scenario(), role="client")
+        self.assertFalse(check.passed)
+        self.assertIn("[5]", check.message)
 
     def _isolation(self, results):
         return [r for r in results if r.name == "cpu_isolation"][0]

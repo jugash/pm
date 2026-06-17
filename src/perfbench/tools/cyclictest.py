@@ -15,7 +15,7 @@ from typing import Optional
 from perfbench.config.schema import Scenario
 from perfbench.errors import ParseError
 from perfbench.results.models import Measurement
-from perfbench.tools.base import ToolAdapter, cores_arg, register, us_to_ns
+from perfbench.tools.base import ToolAdapter, cores_spec, register, us_to_ns
 
 _LINE_RE = re.compile(
     r"T:\s*(\d+).*?Min:\s*(\d+).*?Avg:\s*(\d+).*?Max:\s*(\d+)"
@@ -39,10 +39,11 @@ class Cyclictest(ToolAdapter):
 
     def client_command(self, scenario: Scenario, server_address: str) -> str:
         cores = scenario.cpu.client_cores
+        threads = scenario.cpu.request_count("client")
         return (
             f"{self.params['binary']} -q -m --priority={self.params['priority']} "
-            f"--interval={self.params['interval_us']} -t {len(cores)} "
-            f"-a {cores_arg(cores)} -D {self.params['duration_s']}"
+            f"--interval={self.params['interval_us']} -t {threads} "
+            f"-a {cores_spec(cores, scenario)} -D {self.params['duration_s']}"
         )
 
     def parse(self, output: str) -> list[Measurement]:

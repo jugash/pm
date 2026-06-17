@@ -37,6 +37,20 @@ Platform (OCP); plain-Kubernetes differences are noted inline.
 - **Onload kernel module + sfc driver** on the nodes (KMM / kmods-via-
   containers on OCP), and an Onload userland in the bench image matching the
   module version.
+- **Device plugins** that hand the benchmark pods their isolated CPUs and the
+  Onload userland, so scenarios never name cores or mount device nodes by
+  hand:
+  - an **isolated-cpus plugin** advertising a resource (default
+    `perfbench.io/isolated-cpus`) that allocates cores from the node's
+    `isolated` set and injects their ids as `ISOLATED_CPUS`;
+  - an **onload plugin** advertising a resource (default
+    `perfbench.io/onload`) that mounts `/dev/onload` + `/dev/onload_epoll`,
+    injects the matching `libonload.so` and sets `ONLOAD_LIB`.
+
+  Both resources are configurable (`runner.isolatedCpusResource` /
+  `runner.onloadResource`, or `--isolated-cpus-resource` /
+  `--onload-resource`). The `single-numa-node` Topology Manager policy aligns
+  the allocated cores, the SR-IOV VF and the Onload devices on one NUMA node.
 
 ## Install the chart
 
@@ -52,10 +66,11 @@ Installs:
 
 - **results exporter** — Deployment + Service + ServiceMonitor + PVC state;
 - **SecurityContextConstraints** (`openshift.enabled=true`, default) —
-  grants the benchmark pods NET_RAW/NET_ADMIN/IPC_LOCK/SYS_NICE and the
-  hostPath mounts for `/dev/onload`/`/dev/sfc_char`. Cluster-admin required;
-  on plain k8s set `openshift.enabled=false` (PSS: the namespace needs the
-  `privileged` pod-security level instead);
+  grants the benchmark pods NET_RAW/NET_ADMIN/IPC_LOCK/SYS_NICE. The Onload
+  device nodes now arrive via the onload device plugin, so the benchmark pods
+  no longer need hostPath access (only the short-lived node-check debug pods
+  do). Cluster-admin required; on plain k8s set `openshift.enabled=false`
+  (PSS: the namespace needs the `privileged` pod-security level instead);
 - **RBAC** — a namespace Role letting the runner create/exec/delete pods;
 - **SriovNetworkNodePolicy + NetworkAttachmentDefinition** (when enabled);
 - **Grafana dashboards** ConfigMap.
@@ -81,10 +96,13 @@ oc -n perfbench logs -f job/perfbench-runner-2
 Each upgrade with `runner.enabled=true` creates a fresh revision-suffixed
 Job. The Job runs `perfbench k8s-run`, which is fully self-contained:
 
-1. renders Guaranteed-QoS client/server pods (exclusive CPUs sized from the
-   scenario's role cores, hugepages, Multus annotation, SR-IOV resource,
-   Onload device mounts for bypass scenarios), pinned to
-   `runner.clientNode`/`serverNode`;
+1. renders client/server pods that request their substrate from device
+   plugins — `<isolatedCpusResource>: N` (N sized from the scenario's role
+   cores or `cpu.count`) and, for bypass scenarios, `<onloadResource>: 1` —
+   plus hugepages, the Multus annotation and the SR-IOV resource, pinned to
+   `runner.clientNode`/`serverNode`. The pods read `ISOLATED_CPUS` (for
+   `taskset`) and `ONLOAD_LIB` (`LD_PRELOAD`) at runtime, so no core ids or
+   `/dev/onload` hostPaths are baked in;
 2. applies them, waits for Ready, resolves the **data-path address** from
    the Multus `network-status` annotation (never the cluster pod IP — that
    would benchmark the CNI overlay);
@@ -124,7 +142,7 @@ pod. So these checks genuinely verify the node the pod landed on:
 
 | check | what it sees from a pod |
 |---|---|
-| `cpu_isolation` | node truth (`/sys/devices/system/cpu/isolated`) — verifies the PerformanceProfile actually isolated your scenario cores |
+| `cpu_isolation` | reads the pod's own `$ISOLATED_CPUS` (what the device plugin allocated) and checks every one is in the node's `/sys/devices/system/cpu/isolated` set — fatal if the var is empty (plugin didn't allocate) |
 | `cpu_governor`, `smt`, `transparent_hugepages` | node truth (host sysfs) |
 | `nic_driver` | the VF inside the pod (`ethtool -i net1`) — verifies you got a real sfc VF, not a veth |
 | `onload` | the pod image — verifies the userland is present |
@@ -152,12 +170,20 @@ The irqbalance blind spot is handled at two levels:
    section. The debug pod is allowed by the chart's SCC (privileged is
    required for hostPID); it is deleted immediately after the checks.
 
-Note also: the scenario's `cpu.client_cores` are used for `taskset` inside
-the pod and for the isolation check; with the static CPU manager the pod is
-*allocated* exclusive cores by kubelet, so set the scenario cores to match
-the cpuset the pod actually receives (`oc exec … -- cat
-/sys/fs/cgroup/cpuset.cpus.effective`) or run with `require_isolated: false`
-and rely on the env snapshot.
+Note on CPU pinning: k8s scenarios no longer name their cores. Set
+`cpu.count` (how many isolated CPUs the role needs) and leave
+`client_cores`/`server_cores` out — the isolated-cpus plugin allocates that
+many and injects the ids as `ISOLATED_CPUS`, which the harness uses verbatim
+for `taskset` and the isolation check. (Explicit core lists are still required
+for `platform: baremetal`, where the harness pins to the host's isolated
+cores directly.) For example:
+
+```yaml
+cpu:
+  count: 2          # request 2 isolated CPUs from the device plugin
+  numa_node: 0
+  require_isolated: true
+```
 
 ## Checklist for a fair bare-metal comparison
 
