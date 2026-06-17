@@ -8,7 +8,7 @@ from typing import Optional
 from perfbench.config.schema import Protocol, Scenario
 from perfbench.errors import ParseError
 from perfbench.results.models import Measurement
-from perfbench.tools.base import ToolAdapter, ms_to_ns, register
+from perfbench.tools.base import ToolAdapter, data_path_ip, ms_to_ns, register
 
 
 @register
@@ -23,14 +23,18 @@ class Iperf3(ToolAdapter):
     }
 
     def server_command(self, scenario: Scenario) -> Optional[str]:
-        command = f"{self.params['binary']} -s -1 -p {self.params['port']}"
+        bind = data_path_ip(scenario)
+        bind_flag = f" -B {bind}" if bind else ""
+        command = f"{self.params['binary']} -s -1 -p {self.params['port']}{bind_flag}"
         return self.wrap(command, scenario, role="server")
 
     def client_command(self, scenario: Scenario, server_address: str) -> str:
         udp = " -u -b 0" if Protocol(self.params["protocol"]) is Protocol.UDP else ""
+        bind = data_path_ip(scenario)
+        bind_flag = f" -B {bind}" if bind else ""
         command = (
             f"{self.params['binary']} -c {server_address} -p {self.params['port']} "
-            f"-t {self.params['duration_s']} -P {self.params['parallel']} -J{udp}"
+            f"-t {self.params['duration_s']} -P {self.params['parallel']} -J{udp}{bind_flag}"
         )
         return self.wrap(command, scenario, role="client")
 

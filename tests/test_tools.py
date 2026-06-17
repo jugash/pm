@@ -309,5 +309,59 @@ class TestEflatency(unittest.TestCase):
             _tool("eflatency").parse("eflatency: something went wrong")
 
 
+class TestInterfaceSelection(unittest.TestCase):
+    """k8s socket tools bind to the Multus secondary (low-latency) interface."""
+
+    # A *resolved* k8s scenario: the SR-IOV VF shows up as net1 in the pod.
+    K8S_NIC = {"vendor": "0x1924", "ports": [{"name": "net1", "numa_node": 0}]}
+    BIND = "$(ip -o -4 addr show dev net1 scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+
+    def _k8s(self, **over):
+        return k8s_scenario(nic=self.K8S_NIC, **over)
+
+    def test_iperf3_binds_both_sides_on_k8s(self):
+        tool = _tool("iperf3")
+        sc = self._k8s(network_path="kernel", onload=None)
+        self.assertIn(f"-B {self.BIND}", tool.server_command(sc))
+        self.assertIn(f"-B {self.BIND}", tool.client_command(sc, "192.168.100.7"))
+
+    def test_iperf3_no_bind_on_baremetal(self):
+        tool = _tool("iperf3")
+        self.assertNotIn("-B ", tool.server_command(kernel_scenario()))
+        self.assertNotIn("-B ", tool.client_command(kernel_scenario(), "10.0.0.2"))
+
+    def test_netperf_binds_local_address_on_k8s(self):
+        tool = _tool("netperf")
+        sc = self._k8s(network_path="kernel", onload=None)
+        self.assertIn(f"-L {self.BIND}", tool.server_command(sc))
+        self.assertIn(f"-L {self.BIND}", tool.client_command(sc, "192.168.100.7"))
+
+    def test_sockperf_unicast_server_binds_listener_on_k8s(self):
+        cmd = _tool("sockperf").server_command(self._k8s())
+        self.assertIn(f"server -i {self.BIND} -p 11111", cmd)
+
+    def test_sockperf_multicast_uses_secondary_interface_on_k8s(self):
+        sc = self._k8s(
+            multicast={"group": "239.100.1.1", "port": 12000},
+            tools=[{"name": "sockperf", "params": {"protocol": "udp"}}],
+        )
+        tool = _tool("sockperf", protocol="udp")
+        self.assertIn(f"--mc-rx-if {self.BIND}", tool.server_command(sc))
+        self.assertIn(f"--mc-tx-if {self.BIND}", tool.client_command(sc, "x"))
+
+    def test_explicit_mc_if_param_overrides_default(self):
+        sc = self._k8s(
+            multicast={"group": "239.100.1.1", "port": 12000},
+            tools=[{"name": "sockperf", "params": {"protocol": "udp"}}],
+        )
+        tool = _tool("sockperf", protocol="udp", mc_rx_if="10.9.9.9")
+        self.assertIn("--mc-rx-if 10.9.9.9", tool.server_command(sc))
+
+    def test_unresolved_k8s_scenario_skips_bind(self):
+        # vendor-only ports (not yet resolved, e.g. `perfbench plan`): no bind
+        sc = k8s_scenario(nic={"vendor": "0x1924", "ports": [{"card": "x2522-a"}]})
+        self.assertNotIn("-B ", _tool("iperf3").client_command(sc, "10.0.0.2"))
+
+
 if __name__ == "__main__":
     unittest.main()

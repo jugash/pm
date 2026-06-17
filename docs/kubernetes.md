@@ -2,9 +2,13 @@
 
 The k8s scenarios answer: *how close does a correctly configured pod get to
 bare metal?* For that to be a fair fight, the pod must receive the same
-substrate — an SR-IOV VF on the same NIC, exclusive isolated cores,
-hugepages, and the Onload userland. This page targets OpenShift Container
-Platform (OCP); plain-Kubernetes differences are noted inline.
+substrate — a dedicated Solarflare data-path interface, exclusive isolated
+cores, hugepages, and the Onload userland. The data-path NIC is delivered by
+**PF-IOV**: the card is partitioned into several physical functions, and a
+Multus `host-device` CNI moves one PF netdev into the pod's network namespace
+(an SR-IOV VF model is also supported; see `nad.type`). This page targets
+OpenShift Container Platform (OCP); plain-Kubernetes differences are noted
+inline.
 
 ## Node prerequisites (OCP)
 
@@ -31,9 +35,16 @@ Platform (OCP); plain-Kubernetes differences are noted inline.
 
   (Plain k8s: set kubelet `--cpu-manager-policy=static
   --topology-manager-policy=single-numa-node` and kernel args by hand.)
-- **SR-IOV Network Operator** (supported OCP operator; Multus is built into
-  OCP) — the chart's `SriovNetworkNodePolicy` carves VFs from the Solarflare
-  PFs with `deviceType: netdevice` (Onload needs kernel netdev VFs).
+- **PF-IOV partitioning + Multus host-device CNI** (Multus is built into OCP).
+  Partition each Solarflare port into multiple physical functions with
+  `sfboot` (e.g. `sfboot pf-count=8`) so there is a dedicated PF netdev per
+  benchmark pod, then attach one to the pod via a `host-device` NAD
+  (`nad.type=host-device`, `nad.device=<pf>`). host-device moves the real PF
+  into the pod netns for the pod's lifetime and returns it on delete — the pod
+  gets the actual silicon, not a veth, and **no device-plugin resource is
+  requested for the NIC**. (Alternative: `nad.type=sriov` + the SR-IOV Network
+  Operator, where `SriovNetworkNodePolicy` carves VFs and pods request a VF
+  resource via `runner.nicResource`.)
 - **Onload kernel module + sfc driver** on the nodes (KMM / kmods-via-
   containers on OCP), and an Onload userland in the bench image matching the
   module version.
@@ -50,17 +61,22 @@ Platform (OCP); plain-Kubernetes differences are noted inline.
   Both resources are configurable (`runner.isolatedCpusResource` /
   `runner.onloadResource`, or `--isolated-cpus-resource` /
   `--onload-resource`). The `single-numa-node` Topology Manager policy aligns
-  the allocated cores, the SR-IOV VF and the Onload devices on one NUMA node.
+  the allocated cores and the Onload devices on one NUMA node; pin the
+  benchmark pods to nodes whose data-path PF lives on that same NUMA node.
 
 ## Install the chart
 
 ```bash
+# PF-IOV (default): host-device moves a partitioned Solarflare PF into the pod
 helm install perfbench deploy/helm/perfbench -n perfbench --create-namespace \
   --set serviceMonitor.labels.release=monitoring \
-  --set sriov.enabled=true \
-  --set sriov.nodePolicy.nicSelector.pfNames='{ens1f0,ens2f0}' \
-  --set nad.enabled=true --set nad.name=sriov-trading
+  --set nad.enabled=true --set nad.name=sfc-lowlat \
+  --set nad.type=host-device --set nad.device=ens2f0
 ```
+
+(SR-IOV instead: `--set nad.type=sriov --set sriov.enabled=true --set
+sriov.nodePolicy.nicSelector.pfNames='{ens1f0,ens2f0}'`, and set
+`runner.nicResource=amd.com/sfc_vf`.)
 
 Installs:
 
@@ -72,7 +88,8 @@ Installs:
   do). Cluster-admin required; on plain k8s set `openshift.enabled=false`
   (PSS: the namespace needs the `privileged` pod-security level instead);
 - **RBAC** — a namespace Role letting the runner create/exec/delete pods;
-- **SriovNetworkNodePolicy + NetworkAttachmentDefinition** (when enabled);
+- **NetworkAttachmentDefinition** (`nad.enabled`) — host-device or sriov type;
+  **SriovNetworkNodePolicy** only for the SR-IOV path (`sriov.enabled`);
 - **Grafana dashboards** ConfigMap.
 
 All images are UBI 9 based (`deploy/docker/`): `Dockerfile.exporter`,
@@ -99,13 +116,19 @@ Job. The Job runs `perfbench k8s-run`, which is fully self-contained:
 1. renders client/server pods that request their substrate from device
    plugins — `<isolatedCpusResource>: N` (N sized from the scenario's role
    cores or `cpu.count`) and, for bypass scenarios, `<onloadResource>: 1` —
-   plus hugepages, the Multus annotation and the SR-IOV resource, pinned to
-   `runner.clientNode`/`serverNode`. The pods read `ISOLATED_CPUS` (for
-   `taskset`) and `ONLOAD_LIB` (`LD_PRELOAD`) at runtime, so no core ids or
-   `/dev/onload` hostPaths are baked in;
+   plus hugepages and the Multus annotation that attaches the data-path PF,
+   pinned to `runner.clientNode`/`serverNode`. The pods read `ISOLATED_CPUS`
+   (for `taskset`) and `ONLOAD_LIB` (`LD_PRELOAD`) at runtime, so no core ids
+   or `/dev/onload` hostPaths are baked in;
 2. applies them, waits for Ready, resolves the **data-path address** from
    the Multus `network-status` annotation (never the cluster pod IP — that
-   would benchmark the CNI overlay);
+   would benchmark the CNI overlay). The socket benchmarks also **bind their
+   local endpoint to the Multus secondary interface** (the relocated PF, e.g.
+   `net1`): iperf3 (`-B`), netperf (`-L`) and sockperf (server `-i`, and
+   multicast `--mc-rx-if`/`--mc-tx-if`) take that interface's address, read
+   in-pod at runtime, so traffic traverses the low-latency NIC rather than
+   eth0. (sfnt and eflatency already target it — via the data-path address and
+   the resolved interface name respectively.);
 
    The NAD must have IPAM so the pods get an L3 address on the data path.
    Two options: dynamic (`nad.ipam` whereabouts/host-local, the chart's
@@ -127,12 +150,13 @@ The same command works from a laptop/bastion with `oc` configured:
 perfbench k8s-run scenarios/ -s k8s-onload-net \
   --namespace perfbench --image ghcr.io/jugash/perfbench-bench:0.1.0 \
   --client-node worker-a --server-node worker-b \
-  --network sriov-trading --sriov-resource amd.com/sfc_vf \
+  --network sfc-lowlat \
   --client-ip 192.168.100.1/24 --server-ip 192.168.100.2/24 \
   --push http://perfbench-exporter.perfbench:9109
 ```
 
-(Drop `--client-ip/--server-ip` when the NAD does dynamic IPAM.)
+(Drop `--client-ip/--server-ip` when the NAD does dynamic IPAM. PF-IOV needs
+no `--nic-resource`; add it only for the SR-IOV model.)
 
 ## How preflight works inside pods
 
@@ -144,7 +168,7 @@ pod. So these checks genuinely verify the node the pod landed on:
 |---|---|
 | `cpu_isolation` | reads the pod's own `$ISOLATED_CPUS` (what the device plugin allocated) and checks every one is in the node's `/sys/devices/system/cpu/isolated` set — fatal if the var is empty (plugin didn't allocate) |
 | `cpu_governor`, `smt`, `transparent_hugepages` | node truth (host sysfs) |
-| `nic_driver` | the VF inside the pod (`ethtool -i net1`) — verifies you got a real sfc VF, not a veth |
+| `nic_driver` | the data-path interface inside the pod (`ethtool -i net1`) — verifies you got the real relocated `sfc` PF, not a veth |
 | `onload` | the pod image — verifies the userland is present |
 | `irqbalance` | **cannot see host processes** (PID namespace) |
 
@@ -187,7 +211,8 @@ cpu:
 
 ## Checklist for a fair bare-metal comparison
 
-- Same physical NIC port (VF) as the bare-metal scenario, same NUMA node.
+- Same physical Solarflare port (a PF off the same card) as the bare-metal
+  scenario, same NUMA node.
 - Pod cores within the node's isolated set; verified by preflight/env
   snapshot taken inside the pod.
 - Same Onload version in-image as the node's module (both appear in the env

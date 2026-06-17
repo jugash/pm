@@ -16,7 +16,7 @@ from typing import Optional
 from perfbench.config.schema import Protocol, Scenario
 from perfbench.errors import ParseError
 from perfbench.results.models import Measurement
-from perfbench.tools.base import ToolAdapter, register, us_to_ns
+from perfbench.tools.base import ToolAdapter, data_path_ip, register, us_to_ns
 
 _SELECTORS = (
     "MIN_LATENCY,MEAN_LATENCY,P50_LATENCY,P90_LATENCY,"
@@ -48,14 +48,20 @@ class Netperf(ToolAdapter):
         return "TCP_RR" if Protocol(self.params["protocol"]) is Protocol.TCP else "UDP_RR"
 
     def server_command(self, scenario: Scenario) -> Optional[str]:
-        command = f"{self.params['server_binary']} -D -p {self.params['port']}"
+        bind = data_path_ip(scenario)
+        bind_flag = f" -L {bind}" if bind else ""
+        command = f"{self.params['server_binary']} -D -p {self.params['port']}{bind_flag}"
         return self.wrap(command, scenario, role="server")
 
     def client_command(self, scenario: Scenario, server_address: str) -> str:
         size = self.params["msg_size"]
+        bind = data_path_ip(scenario)
+        # -L binds the control+data sockets' local address to the VF, so the
+        # request/response traffic egresses the low-latency NIC, not eth0.
+        bind_flag = f" -L {bind}" if bind else ""
         command = (
-            f"{self.params['binary']} -H {server_address} -p {self.params['port']} "
-            f"-t {self._test_name()} -l {self.params['duration_s']} -- "
+            f"{self.params['binary']} -H {server_address} -p {self.params['port']}"
+            f"{bind_flag} -t {self._test_name()} -l {self.params['duration_s']} -- "
             f"-r {size},{size} -o {_SELECTORS}"
         )
         return self.wrap(command, scenario, role="client")

@@ -11,12 +11,19 @@ Two pieces:
   exactly like SSH hosts.
 
 ``render_benchmark_pod`` produces a benchmark pod manifest with the Multus
-network annotation, the SR-IOV resource request, and — instead of statically
-isolated cores and hostPath Onload device mounts — *device-plugin* resource
-requests: an isolated-cpus resource (the plugin injects ``ISOLATED_CPUS``) and
-an onload resource (the plugin mounts ``/dev/onload``/``/dev/onload_epoll``,
-injects the library and sets ``ONLOAD_LIB``). The single-numa-node Topology
-Manager policy keeps the cores, the VF and the devices on one NUMA node.
+network annotation and — instead of statically isolated cores and hostPath
+Onload device mounts — *device-plugin* resource requests: an isolated-cpus
+resource (the plugin injects ``ISOLATED_CPUS``) and an onload resource (the
+plugin mounts ``/dev/onload``/``/dev/onload_epoll``, injects the library and
+sets ``ONLOAD_LIB``). The single-numa-node Topology Manager policy keeps the
+cores and the devices on one NUMA node.
+
+Data-path NIC: the low-latency interface is delivered by Multus. The default
+model is **PF-IOV** — a Solarflare card partitioned into several physical
+functions, one of which a ``host-device``-style CNI relocates into the pod's
+network namespace; that path needs no pod resource request (the NAD does the
+move). An optional ``nic_resource`` covers the alternative SR-IOV-device-plugin
+model, where the pod must also request a VF resource.
 """
 
 from __future__ import annotations
@@ -161,7 +168,8 @@ class Kubectl:
                 f"attach the secondary network — check that the "
                 f"NetworkAttachmentDefinition {network!r} exists in namespace "
                 f"{self.namespace!r} (kubectl get net-attach-def -n "
-                f"{self.namespace}) and that Multus/SR-IOV operator is running."
+                f"{self.namespace}) and that Multus (and the host-device/SR-IOV "
+                f"CNI that attaches the NIC) is running."
             )
         try:
             statuses = json.loads(raw)
@@ -292,7 +300,7 @@ class K8sBenchSession:
         kubectl: Kubectl,
         image: str,
         networks: Sequence[str] = (),
-        sriov_resource: Optional[str] = None,
+        nic_resource: Optional[str] = None,
         client_node: Optional[str] = None,
         server_node: Optional[str] = None,
         hugepages_2mi: str = "1Gi",
@@ -305,7 +313,7 @@ class K8sBenchSession:
         self.kubectl = kubectl
         self.image = image
         self.networks = tuple(networks)
-        self.sriov_resource = sriov_resource
+        self.nic_resource = nic_resource
         self.nodes = {"client": client_node, "server": server_node}
         self.hugepages_2mi = hugepages_2mi
         self.ready_timeout_s = ready_timeout_s
@@ -331,7 +339,7 @@ class K8sBenchSession:
                 image=self.image,
                 node=self.nodes[role],
                 networks=self.networks,
-                sriov_resource=self.sriov_resource,
+                nic_resource=self.nic_resource,
                 hugepages_2mi=self.hugepages_2mi,
                 namespace=self.kubectl.namespace,
                 static_ip=self.static_ips[role],
@@ -422,7 +430,7 @@ def render_benchmark_pod(
     image: str,
     node: Optional[str] = None,
     networks: Sequence[str] = (),
-    sriov_resource: Optional[str] = None,
+    nic_resource: Optional[str] = None,
     hugepages_2mi: str = "1Gi",
     namespace: str = "perfbench",
     static_ip: Optional[str] = None,
@@ -444,9 +452,13 @@ def render_benchmark_pod(
     The integral ``cpu`` request is intentionally dropped: the isolated cores
     are owned by the plugin (and ``isolcpus``), not kubelet's CPU manager, so
     requesting both would double-count. ``memory`` requests==limits and the
-    single-numa-node Topology Manager keeps cores, VF and devices NUMA-aligned.
-    SR-IOV VF is attached via the Multus annotation (optionally a static
-    ``ips`` request on the data-path network).
+    single-numa-node Topology Manager keeps cores and devices NUMA-aligned.
+
+    The data-path NIC is attached via the Multus annotation. With PF-IOV the
+    CNI moves a Solarflare PF into the pod netns and no resource is requested;
+    set ``nic_resource`` only for the SR-IOV-device-plugin model, which also
+    needs a VF resource request. A static ``ips`` request on the data-path
+    network is supported either way.
     """
     isolated_count = str(scenario.cpu.request_count(role))
     resources: dict = {
@@ -454,8 +466,8 @@ def render_benchmark_pod(
         "memory": "2Gi",
         "hugepages-2Mi": hugepages_2mi,
     }
-    if sriov_resource:
-        resources[sriov_resource] = "1"
+    if nic_resource:
+        resources[nic_resource] = "1"
     if scenario.network_path in (NetworkPath.ONLOAD, NetworkPath.EFVI):
         resources[onload_resource] = "1"
 

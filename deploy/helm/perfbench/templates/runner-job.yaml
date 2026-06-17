@@ -48,8 +48,8 @@ spec:
             {{- if .Values.runner.serverIp }}
             - --server-ip={{ .Values.runner.serverIp }}
             {{- end }}
-            {{- if .Values.runner.sriovResource }}
-            - --sriov-resource={{ .Values.runner.sriovResource }}
+            {{- if .Values.runner.nicResource }}
+            - --nic-resource={{ .Values.runner.nicResource }}
             {{- end }}
             {{- if .Values.runner.isolatedCpusResource }}
             - --isolated-cpus-resource={{ .Values.runner.isolatedCpusResource }}

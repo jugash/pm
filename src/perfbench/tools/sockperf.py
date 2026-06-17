@@ -35,7 +35,13 @@ from typing import Optional
 from perfbench.config.schema import MulticastSpec, Protocol, Scenario
 from perfbench.errors import ParseError, SchemaError
 from perfbench.results.models import Measurement
-from perfbench.tools.base import ToolAdapter, quantile_label, register, us_to_ns
+from perfbench.tools.base import (
+    ToolAdapter,
+    data_path_ip,
+    quantile_label,
+    register,
+    us_to_ns,
+)
 
 _PCT_RE = re.compile(r"percentile\s+([\d.]+)\s*=\s*([\d.]+)")
 _MINMAX_RE = re.compile(r"<(MIN|MAX)>\s+observation\s*=\s*([\d.]+)")
@@ -86,8 +92,13 @@ class Sockperf(ToolAdapter):
             return f"-f {self.params['feed_file']}"
         return f"-i {mc.group} -p {mc.port}"
 
-    def _mc_if_flag(self, key: str, flag: str) -> str:
-        value = self.params.get(key)
+    def _mc_if_flag(self, key: str, flag: str, scenario: Scenario) -> str:
+        """Multicast rx/tx interface, by IP (sockperf rejects names).
+
+        Explicit ``mc_rx_if``/``mc_tx_if`` params win; otherwise on k8s default
+        to the data-path (Multus secondary) interface so IGMP joins and
+        multicast egress happen on the low-latency NIC, not eth0."""
+        value = self.params.get(key) or data_path_ip(scenario)
         return f" --{flag} {value}" if value else ""
 
     # -- commands --------------------------------------------------------------
@@ -95,10 +106,19 @@ class Sockperf(ToolAdapter):
     def _server_body(self, scenario: Scenario) -> tuple[str, str]:
         mc = self._mcast(scenario)
         prefix = self._feed_prefix(mc) if mc and mc.group_count > 1 else ""
-        target = self._target_args(mc, "") if mc else f"-p {self.params['port']}"
+        if mc:
+            target = self._target_args(mc, "")
+            mc_if = self._mc_if_flag("mc_rx_if", "mc-rx-if", scenario)
+        else:
+            # unicast: bind the listener to the data-path interface so the
+            # server answers over the low-latency NIC (falls back to all
+            # interfaces off-k8s, where data_path_ip is empty).
+            bind = data_path_ip(scenario)
+            listen = f"-i {bind} " if bind else ""
+            target = f"{listen}-p {self.params['port']}"
+            mc_if = ""
         command = (
-            f"{self.params['binary']} server {target}{self._proto_flag()}"
-            f"{self._mc_if_flag('mc_rx_if', 'mc-rx-if')}"
+            f"{self.params['binary']} server {target}{self._proto_flag()}{mc_if}"
         )
         return prefix, command
 
@@ -125,7 +145,7 @@ class Sockperf(ToolAdapter):
         mcast = ""
         prefix = ""
         if mc is not None:
-            mcast = f" --mc-ttl {mc.ttl}{self._mc_if_flag('mc_tx_if', 'mc-tx-if')}"
+            mcast = f" --mc-ttl {mc.ttl}{self._mc_if_flag('mc_tx_if', 'mc-tx-if', scenario)}"
             if mc.group_count > 1:
                 prefix = self._feed_prefix(mc)
         command = (

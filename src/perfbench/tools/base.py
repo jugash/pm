@@ -58,6 +58,29 @@ def device_plugin(scenario: Scenario) -> bool:
     return scenario.platform is Platform.K8S
 
 
+def data_path_ip(scenario: Scenario) -> str:
+    """Shell expression for the local IPv4 on the data-path interface.
+
+    On k8s the pod has both the cluster network (eth0) and the low-latency
+    Multus secondary interface (the Solarflare PF moved in by host-device, or
+    an SR-IOV VF — e.g. ``net1``). Socket tools must bind to that interface's
+    address so traffic actually traverses the accelerated NIC rather than eth0.
+    We read the address *at runtime* inside the pod from the resolved interface
+    name — symmetric on both sides and independent of the (dynamic) IPAM.
+
+    Returns ``""`` for non-k8s scenarios or when the interface name has not
+    been resolved yet (e.g. ``perfbench plan`` previews), so callers simply
+    skip binding and behave exactly as before.
+    """
+    if not device_plugin(scenario) or not scenario.nic.resolved:
+        return ""
+    iface = scenario.nic.interface
+    return (
+        f"$(ip -o -4 addr show dev {iface} scope global "
+        f"| awk '{{print $4}}' | cut -d/ -f1 | head -n1)"
+    )
+
+
 def cores_arg(cores: Sequence[int]) -> str:
     return ",".join(str(c) for c in cores)
 

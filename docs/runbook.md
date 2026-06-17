@@ -57,7 +57,7 @@ perfbench run scenarios/ \
 
 Notes:
 
-- `--server-address` is the data-path IP (the benchmark NIC/bond/VF), not
+- `--server-address` is the data-path IP (the benchmark NIC/bond/PF), not
   the management address.
 - Each scenario runs its repetitions back-to-back; the matrix above is ~30
   min with the shipped durations.

@@ -42,7 +42,37 @@ dashboards:
   labelValue: "1"
   folderAnnotation: ""
 
-# SR-IOV / Multus objects for the benchmark pods (kernel-bypass data path).
+# Multus NetworkAttachmentDefinition for the benchmark data path (the
+# low-latency Solarflare NIC).
+nad:
+  enabled: false
+  name: sfc-lowlat
+  # Delivery model:
+  #   host-device (default, PF-IOV): the card is partitioned into multiple PFs
+  #     (sfboot pf-count); the host-device CNI moves one PF netdev into the pod
+  #     netns. No device-plugin resource needed — leave runner.nicResource
+  #     empty and sriov.enabled=false.
+  #   sriov: SR-IOV-device-plugin model; ties the NAD to a VF resource (set
+  #     sriov.* below and runner.nicResource).
+  type: host-device
+  # host-device: which host PF to relocate. Use the netdev name, or instead
+  # set pciBusID / hwaddr (one of the three). With a partitioned card, point
+  # client/server at different PFs (or pin nodes that each expose this name).
+  device: ens2f0
+  pciBusID: ""
+  hwaddr: ""
+  # IPAM for the benchmark subnet. Dynamic (default): whereabouts assigns from
+  # the range. Static: use {"type": "static"} and set runner.clientIp/serverIp
+  # so each pod requests its IP via the Multus annotation.
+  ipam: |-
+    {
+      "type": "whereabouts",
+      "range": "192.168.100.0/24"
+    }
+  vlan: 0   # sriov type only (host-device moves the whole netdev)
+
+# SR-IOV device-plugin objects — ONLY for nad.type=sriov. Disabled by default;
+# PF-IOV/host-device does not use these.
 sriov:
   enabled: false
   # Name registered by the SR-IOV device plugin; referenced in pod resources.
@@ -59,21 +89,6 @@ sriov:
       pfNames: ["ens1f0", "ens2f0"]
     deviceType: netdevice        # VFs as kernel netdevs (required for Onload)
     isRdma: false
-
-# Multus NetworkAttachmentDefinition for the benchmark data path.
-nad:
-  enabled: false
-  name: sriov-trading
-  # IPAM for the benchmark subnet. Dynamic (default): whereabouts assigns
-  # from the range. Static: use {"type": "static"} and set
-  # runner.clientIp/serverIp so each pod requests its IP via the Multus
-  # annotation.
-  ipam: |-
-    {
-      "type": "whereabouts",
-      "range": "192.168.100.0/24"
-    }
-  vlan: 0
 
 # Benchmark pod image (the tools). Pods are created by the runner/harness.
 bench:
@@ -96,13 +111,15 @@ runner:
   scenarioIds: []
   clientNode: ""          # pin client pod to a node (recommended)
   serverNode: ""          # pin server pod to a different node
-  networks: [sriov-trading]
+  networks: [sfc-lowlat]
   # Static IPs (CIDR form) on the first network via the Multus annotation.
   # Requires the NAD to use static IPAM (nad.ipam: {"type": "static"}).
   # Leave empty when the NAD has whereabouts/host-local IPAM.
   clientIp: ""            # e.g. 192.168.100.1/24
   serverIp: ""            # e.g. 192.168.100.2/24
-  sriovResource: amd.com/sfc_vf
+  # NIC extended resource to request — ONLY for the SR-IOV model. Empty for
+  # PF-IOV/host-device, where Multus moves the PF into the pod (no resource).
+  nicResource: ""
   # Device-plugin resources the benchmark pods request. The isolated-cpus
   # plugin injects ISOLATED_CPUS (taskset target); the onload plugin mounts
   # /dev/onload + /dev/onload_epoll, injects the library and sets ONLOAD_LIB

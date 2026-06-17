@@ -323,7 +323,10 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--server-ip", default=None,
               help="Static IP (CIDR, e.g. 192.168.100.2/24) for the server pod "
                    "on the first network; requires a static-IPAM NAD.")
-@click.option("--sriov-resource", default=None, help="e.g. amd.com/sfc_vf")
+@click.option("--nic-resource", default=None,
+              help="Optional extended resource for NIC delivery (SR-IOV device "
+                   "plugin), e.g. amd.com/sfc_vf. Leave unset for PF-IOV / "
+                   "host-device, where Multus moves the PF into the pod.")
 @click.option("--isolated-cpus-resource", default=DEFAULT_ISOLATED_CPUS_RESOURCE,
               show_default=True,
               help="Device-plugin resource that allocates isolated CPUs and "
@@ -338,17 +341,18 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--push", "push_url", default=None)
 @click.option("--keep-pods", is_flag=True, help="Leave pods running for debugging.")
 def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
-            server_node, networks, client_ip, server_ip, sriov_resource,
+            server_node, networks, client_ip, server_ip, nic_resource,
             isolated_cpus_resource, onload_resource,
             db, output_dir, skip_preflight, settle, push_url, keep_pods):
     """Provision benchmark pods, run k8s scenarios end-to-end, tear down.
 
     Fully self-contained: renders pods that request isolated CPUs and (for
-    bypass scenarios) Onload from device plugins — plus the SR-IOV VF and
-    hugepages — waits for readiness, resolves the data-path address from the
-    Multus network-status annotation, runs the scenario through the same
-    orchestrator as bare metal, then deletes the pods. This is the command the
-    Helm runner Job executes in-cluster.
+    bypass scenarios) Onload from device plugins, with the low-latency NIC
+    attached by Multus (a partitioned Solarflare PF moved into the pod netns,
+    or an SR-IOV VF) plus hugepages — waits for readiness, resolves the
+    data-path address from the Multus network-status annotation, runs the
+    scenario through the same orchestrator as bare metal, then deletes the
+    pods. This is the command the Helm runner Job executes in-cluster.
     """
     from perfbench.config.schema import Platform
     from perfbench.runner.k8s import K8sBenchSession
@@ -366,11 +370,11 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
         kubectl,
         image=image,
         networks=networks,
-        sriov_resource=sriov_resource,
         client_node=client_node,
         server_node=server_node,
         client_ip=client_ip,
         server_ip=server_ip,
+        nic_resource=nic_resource,
         isolated_cpus_resource=isolated_cpus_resource,
         onload_resource=onload_resource,
     )

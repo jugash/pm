@@ -73,9 +73,10 @@ intend to keep.
 ## Comparing bare metal and Kubernetes
 
 The k8s scenarios are valid comparisons only when the pod gets the same
-substrate as the bare-metal run: SR-IOV VF on the same physical port, static
-CPU Manager with exclusive cores from the same isolated set and NUMA node,
-hugepages, and the same Onload userland as the host kernel module. See
+substrate as the bare-metal run: a dedicated Solarflare PF (PF-IOV, moved into
+the pod by host-device) on the same physical port, exclusive isolated cores
+from the same set and NUMA node, hugepages, and the same Onload userland as
+the host kernel module. See
 docs/kubernetes.md. The interesting result is the *delta* between platforms,
 which should be near zero when containerization is configured correctly; a
 gap is a configuration finding, not a container tax.

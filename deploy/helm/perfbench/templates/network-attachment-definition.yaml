@@ -1,8 +1,15 @@
 {{- if .Values.nad.enabled }}
-# Multus secondary network for the benchmark data path. The
-# k8s.v1.cni.cncf.io/resourceName annotation ties this NAD to the SR-IOV
-# device-plugin resource, so a pod requesting both gets a VF wired onto this
-# network.
+# Multus secondary network for the benchmark data path.
+#
+# Default model is PF-IOV: the Solarflare card is partitioned into several
+# physical functions (sfboot), and the `host-device` CNI moves one PF netdev
+# into the pod's network namespace for the life of the pod (and back out on
+# delete). No SR-IOV device-plugin resource is involved — the move IS the
+# attachment — so benchmark pods request no NIC resource.
+#
+# Set nad.type: sriov for the alternative SR-IOV-device-plugin model, where
+# the NAD is tied to a VF resource (and pods must request it via
+# runner.nicResource).
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
@@ -10,9 +17,28 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "perfbench.labels" . | nindent 4 }}
+  {{- if eq .Values.nad.type "sriov" }}
   annotations:
     k8s.v1.cni.cncf.io/resourceName: {{ printf "%s/%s" .Values.sriov.resourcePrefix .Values.sriov.resourceName }}
+  {{- end }}
 spec:
+  {{- if eq .Values.nad.type "host-device" }}
+  config: |-
+    {
+      "cniVersion": "0.3.1",
+      "type": "host-device",
+      "name": {{ .Values.nad.name | quote }},
+      {{- /* select the host PF to relocate: device name, or pciBusID/hwaddr */}}
+      {{- if .Values.nad.device }}
+      "device": {{ .Values.nad.device | quote }},
+      {{- else if .Values.nad.pciBusID }}
+      "pciBusID": {{ .Values.nad.pciBusID | quote }},
+      {{- else if .Values.nad.hwaddr }}
+      "hwaddr": {{ .Values.nad.hwaddr | quote }},
+      {{- end }}
+      "ipam": {{ .Values.nad.ipam | nindent 8 }}
+    }
+  {{- else }}
   config: |-
     {
       "cniVersion": "0.3.1",
@@ -23,4 +49,5 @@ spec:
       {{- end }}
       "ipam": {{ .Values.nad.ipam | nindent 8 }}
     }
+  {{- end }}
 {{- end }}

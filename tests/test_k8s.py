@@ -165,7 +165,7 @@ class TestStaticIps(unittest.TestCase):
 
         kubectl, fake = _kubectl()  # no network-status response needed
         session = K8sBenchSession(
-            kubectl, image="bench:1", networks=("sriov-trading",),
+            kubectl, image="bench:1", networks=("sfc-lowlat",),
             client_ip="192.168.100.1/24", server_ip="192.168.100.2/24",
         )
         deployment = session.provision(make_scenario())
@@ -215,7 +215,7 @@ class TestK8sBenchSession(unittest.TestCase):
             kubectl,
             image="bench:1",
             networks=networks,
-            sriov_resource="amd.com/sfc_vf",
+            nic_resource="amd.com/sfc_vf",
             client_node="worker-a",
             server_node="worker-b",
         )
@@ -311,14 +311,14 @@ class TestRenderBenchmarkPod(unittest.TestCase):
             role="client",
             image="perfbench/bench:1",
             node="worker-1",
-            networks=["sriov-trading"],
-            sriov_resource="intel.com/sriov_sfc",
+            networks=["sfc-lowlat"],
+            nic_resource="intel.com/sriov_sfc",
         )
         pod = yaml.safe_load(text)
         self.assertEqual(pod["kind"], "Pod")
         self.assertEqual(pod["metadata"]["name"], "bench-client")
         self.assertEqual(
-            pod["metadata"]["annotations"]["k8s.v1.cni.cncf.io/networks"], "sriov-trading"
+            pod["metadata"]["annotations"]["k8s.v1.cni.cncf.io/networks"], "sfc-lowlat"
         )
         container = pod["spec"]["containers"][0]
         requests = container["resources"]["requests"]
@@ -327,6 +327,7 @@ class TestRenderBenchmarkPod(unittest.TestCase):
         self.assertEqual(requests["perfbench.io/isolated-cpus"], "2")
         self.assertNotIn("cpu", requests)
         self.assertEqual(requests, container["resources"]["limits"])
+        # nic_resource set -> SR-IOV VF resource requested (opt-in path)
         self.assertEqual(requests["intel.com/sriov_sfc"], "1")
         self.assertEqual(requests["perfbench.io/onload"], "1")
         # devices come from the plugin now, not hostPath mounts/volumes
@@ -336,6 +337,19 @@ class TestRenderBenchmarkPod(unittest.TestCase):
         self.assertEqual(pod["spec"]["nodeName"], "worker-1")
         caps = container["securityContext"]["capabilities"]["add"]
         self.assertIn("NET_RAW", caps)
+
+    def test_pf_iov_requests_no_nic_resource(self):
+        # default (PF-IOV / host-device): NIC is moved in by Multus, so the pod
+        # requests no NIC extended resource
+        text = render_benchmark_pod(
+            name="c", scenario=make_scenario(), role="client", image="img",
+            networks=["sfc-lowlat"],
+        )
+        requests = yaml.safe_load(text)["spec"]["containers"][0]["resources"]["requests"]
+        self.assertEqual(
+            [k for k in requests if k.endswith("sfc_vf") or "sriov" in k], []
+        )
+        self.assertIn("perfbench.io/isolated-cpus", requests)
 
     def test_resource_names_are_configurable(self):
         text = render_benchmark_pod(

@@ -3,8 +3,8 @@ name: perfbench
 description: >-
   PerfBench: network & CPU latency benchmark harness for low-latency trading
   platforms. Deploys the Prometheus results exporter (Service + ServiceMonitor
-  for Grafana Alloy), optional SR-IOV/Multus networking objects for
-  kernel-bypass benchmark pods, and Grafana dashboards.
+  for Grafana Alloy), optional Multus networking objects (PF-IOV host-device or
+  SR-IOV) for kernel-bypass benchmark pods, and Grafana dashboards.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
@@ -13,6 +13,6 @@ keywords:
   - latency
   - solarflare
   - onload
-  - sriov
+  - multus
 maintainers:
   - name: jugash
