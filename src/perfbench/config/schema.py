@@ -147,6 +147,10 @@ class NicLayout:
     # interface. Set programmatically by the k8s runner; when present the
     # benchmark traffic runs over this interface instead of the bare port.
     vlan_interface: Optional[str] = None
+    # Local data-path IP the tools should bind to (the pod's own VLAN/secondary
+    # address). Stamped per role by the runner so binding uses a known literal
+    # rather than resolving it at run time inside the pod.
+    bind_ip: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Any, path: str = "nic") -> "NicLayout":

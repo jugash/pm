@@ -428,6 +428,10 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
                 f"server={deployment.server_pod} address={deployment.server_address}"
             )
             client, server = session.executors(deployment)
+            # local bind IPs the tools use: the server binds to its own
+            # (resolved) data-path address; the client to its known VLAN/static
+            # IP. Avoids a run-time `ip` lookup inside the pod.
+            client_bind = (client_vlan_ip or client_ip or "").split("/")[0] or None
             orch = Orchestrator(
                 client=client,
                 server=server,
@@ -436,6 +440,8 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
                 output_dir=Path(output_dir),
                 settle_s=settle,
                 on_event=click.echo,
+                client_bind_ip=client_bind,
+                server_bind_ip=deployment.server_address,
             )
             records = orch.run_scenario(
                 sc, skip_preflight=skip_preflight, extra_preflight=node_results

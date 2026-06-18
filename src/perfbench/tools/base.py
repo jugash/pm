@@ -68,20 +68,27 @@ def data_path_ip(scenario: Scenario) -> str:
     We read the address *at runtime* inside the pod from the resolved interface
     name — symmetric on both sides and independent of the (dynamic) IPAM.
 
-    When a VLAN network is layered on the NIC the data-path interface is the
-    VLAN sub-interface (e.g. ``vlan0``), so tools bind there rather than the
-    bare port.
+    Prefers the literal IP the runner stamps onto the scenario
+    (``nic.bind_ip`` — the pod's own VLAN/secondary address, known up front),
+    which is robust. Only when that is unknown does it fall back to resolving
+    the address at run time from the data-path interface (the VLAN sub-iface
+    ``vlan0`` when present, else the bare port); the lookup is PATH-hardened so
+    ``ip`` is found even in a bare ``sh -c`` exec environment.
 
-    Returns ``""`` for non-k8s scenarios or when the interface name has not
-    been resolved yet (e.g. ``perfbench plan`` previews), so callers simply
-    skip binding and behave exactly as before.
+    Returns ``""`` for non-k8s scenarios or when neither a bind IP nor a
+    resolved interface name is available (e.g. ``perfbench plan`` previews), so
+    callers simply skip binding and behave exactly as before.
     """
+    if not device_plugin(scenario):
+        return ""
+    if scenario.nic.bind_ip:
+        return scenario.nic.bind_ip
     iface = scenario.nic.data_path_interface()
-    if not device_plugin(scenario) or iface == "<resolved-at-runtime>":
+    if iface == "<resolved-at-runtime>":
         return ""
     return (
-        f"$(ip -o -4 addr show dev {iface} scope global "
-        f"| awk '{{print $4}}' | cut -d/ -f1 | head -n1)"
+        f'$(PATH="$PATH:/usr/sbin:/sbin" ip -o -4 addr show dev {iface} '
+        f"scope global | awk '{{print $4}}' | cut -d/ -f1 | head -n1)"
     )
 
 

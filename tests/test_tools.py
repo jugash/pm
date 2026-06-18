@@ -312,12 +312,26 @@ class TestEflatency(unittest.TestCase):
 class TestInterfaceSelection(unittest.TestCase):
     """k8s socket tools bind to the Multus secondary (low-latency) interface."""
 
-    # A *resolved* k8s scenario: the SR-IOV VF shows up as net1 in the pod.
+    # A *resolved* k8s scenario: the secondary PF shows up as net1 in the pod.
     K8S_NIC = {"vendor": "0x1924", "ports": [{"name": "net1", "numa_node": 0}]}
-    BIND = "$(ip -o -4 addr show dev net1 scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    # fallback bind expression (no literal bind_ip stamped): PATH-hardened so
+    # `ip` is found in a bare `sh -c` exec environment
+    BIND = ("$(PATH=\"$PATH:/usr/sbin:/sbin\" ip -o -4 addr show dev net1 "
+            "scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)")
 
     def _k8s(self, **over):
         return k8s_scenario(nic=self.K8S_NIC, **over)
+
+    def test_bind_uses_literal_ip_when_stamped(self):
+        # the runner stamps the pod's known data-path IP -> tools bind to the
+        # literal, with no run-time `ip` lookup
+        from dataclasses import replace
+
+        sc = self._k8s(network_path="kernel", onload=None)
+        sc = replace(sc, nic=replace(sc.nic, bind_ip="192.168.110.2"))
+        cmd = _tool("iperf3").server_command(sc)
+        self.assertIn("-B 192.168.110.2", cmd)
+        self.assertNotIn("ip -o -4 addr", cmd)   # no runtime lookup
 
     def test_iperf3_binds_both_sides_on_k8s(self):
         tool = _tool("iperf3")

@@ -62,6 +62,11 @@ class Orchestrator:
     sleep: Callable[[float], None] = time.sleep
     on_event: Callable[[str], None] = lambda msg: None
     extra_env_interfaces: Sequence[str] = field(default_factory=tuple)
+    # local data-path IPs the tools bind to (pod's own VLAN/secondary address),
+    # per role — stamped onto the resolved scenarios so binding uses a known
+    # literal instead of resolving it at run time inside the pod.
+    client_bind_ip: Optional[str] = None
+    server_bind_ip: Optional[str] = None
 
     # -- planning ----------------------------------------------------------
 
@@ -110,6 +115,19 @@ class Orchestrator:
             )
         else:
             client_sc = server_sc = scenario
+
+        # stamp the per-role local bind IP so the tools bind to a known address
+        # (no run-time `ip` lookup inside the pod)
+        from dataclasses import replace as _replace
+
+        if self.client_bind_ip:
+            client_sc = _replace(
+                client_sc, nic=_replace(client_sc.nic, bind_ip=self.client_bind_ip)
+            )
+        if self.server_bind_ip:
+            server_sc = _replace(
+                server_sc, nic=_replace(server_sc.nic, bind_ip=self.server_bind_ip)
+            )
 
         preflight_results = list(extra_preflight or [])
         if skip_preflight:
