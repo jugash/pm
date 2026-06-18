@@ -211,6 +211,19 @@ class Kubectl:
     def logs(self, pod: str) -> str:
         return self._run(f"logs {pod}").stdout
 
+    def describe_events(self, pod: str) -> str:
+        """Recent events for a pod (best-effort). The place CNI / device-plugin
+        failures show up when a pod is stuck (e.g. a NAD that can't get its
+        deviceID, so the sandbox network is never created)."""
+        result = self.executor.run(
+            f"{self.base_command()} get events --field-selector "
+            f"involvedObject.name={pod} "
+            "--sort-by=.lastTimestamp -o custom-columns=TYPE:.type,"
+            "REASON:.reason,MESSAGE:.message --no-headers",
+            timeout=30,
+        )
+        return result.stdout.strip()
+
 
 class PodExecutor(Executor):
     """Runs commands inside a pod via ``kubectl exec``."""

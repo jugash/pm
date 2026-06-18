@@ -76,6 +76,27 @@ class TestRunScenario(unittest.TestCase):
         self.assertTrue(any(c.startswith("START") for c in server.calls))
         self.assertTrue(any("preflight" in e for e in events))
 
+    def test_commands_echoed_to_event_log(self):
+        client, server = _executors()
+        events = []
+        _orchestrator(client, server, on_event=events.append).run_scenario(
+            make_scenario(), skip_preflight=True
+        )
+        self.assertTrue(any("sockperf server $ " in e for e in events))
+        self.assertTrue(any("sockperf client $ " in e for e in events))
+
+    def test_failure_echoes_stderr_to_event_log(self):
+        client, server = _executors()
+        client.responses["sockperf ping-pong"] = ExecResult(
+            "", 124, stdout="", stderr="onload: vlan0 not accelerated\nconnect timed out"
+        )
+        events = []
+        _orchestrator(client, server, on_event=events.append).run_scenario(
+            make_scenario(), skip_preflight=True
+        )
+        self.assertTrue(any("rc=124 (timed out)" in e for e in events))
+        self.assertTrue(any("vlan0 not accelerated" in e for e in events))
+
     def test_preflight_failure_aborts(self):
         client, server = _executors()
         client.responses["pgrep -x irqbalance"] = _ok("999")  # running -> fatal

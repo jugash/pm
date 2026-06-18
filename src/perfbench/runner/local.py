@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import subprocess
@@ -11,6 +12,10 @@ from typing import Mapping, Optional
 from perfbench.runner.base import BackgroundProcess, ExecResult, Executor
 
 TIMEOUT_EXIT_CODE = 124  # matches coreutils `timeout`
+
+# DEBUG logs the literal command line executed (the full `kubectl exec …` for
+# pod targets). Enable with `perfbench … --verbose`.
+log = logging.getLogger(__name__)
 
 
 def _signal_group(proc: subprocess.Popen, sig: int) -> None:
@@ -67,6 +72,7 @@ class LocalExecutor(Executor):
         # group must die, otherwise orphaned children of /bin/sh keep the
         # output pipes open and the final communicate() blocks until the
         # orphan exits — a wedged benchmark would hang the harness.
+        log.debug("run: %s", command)
         started = time.monotonic()
         proc = subprocess.Popen(
             ["/bin/sh", "-c", command],
@@ -103,6 +109,7 @@ class LocalExecutor(Executor):
         )
 
     def start(self, command, env=None) -> BackgroundProcess:
+        log.debug("start: %s", command)
         proc = subprocess.Popen(
             ["/bin/sh", "-c", command],
             stdout=subprocess.PIPE,

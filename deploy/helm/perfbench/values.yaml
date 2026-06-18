@@ -154,6 +154,7 @@ runner:
   onloadResource: perfbench.io/onload
   skipPreflight: false
   keepPods: false
+  verbose: false          # log the literal commands (kubectl exec, VLAN setup) to the Job log
   ttlSecondsAfterFinished: 86400
   resources:
     requests: { cpu: 100m, memory: 128Mi }

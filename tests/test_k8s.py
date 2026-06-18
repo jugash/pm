@@ -33,6 +33,16 @@ class TestKubectl(unittest.TestCase):
             k.delete_pod("x")
         self.assertIn("forbidden", str(ctx.exception))
 
+    def test_describe_events(self):
+        k, fake = _kubectl(responses={
+            "get events": ExecResult(
+                "", 0, stdout="Warning  FailedCreatePodSandBox  ... no deviceID\n"
+            )
+        })
+        out = k.describe_events("pb-x-server")
+        self.assertIn("FailedCreatePodSandBox", out)
+        self.assertIn("involvedObject.name=pb-x-server", fake.calls[-1])
+
     def test_wait_and_logs(self):
         k, fake = _kubectl(responses={"logs": ExecResult("", 0, stdout="hello")})
         k.wait_ready("pod-a", timeout_s=30)

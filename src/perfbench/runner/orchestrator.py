@@ -185,6 +185,9 @@ class Orchestrator:
             client_command=plan.client_command,
             server_command="\n".join(plan.server_commands) or None,
         )
+        tag = f"[{scenario.id}] {plan.adapter.name}"
+        for c in plan.server_commands:
+            self.on_event(f"{tag} server $ {c}")
         backgrounds = [self.server.start(c) for c in plan.server_commands]
         if backgrounds:
             self.sleep(self.settle_s)
@@ -197,21 +200,26 @@ class Orchestrator:
                 for b in backgrounds:
                     if b is not dead and b.running():
                         b.stop()
-                detail = (server_result.stderr or server_result.stdout).strip()[:300]
+                detail = (server_result.stderr or server_result.stdout).strip()
                 tool_run.exit_code = server_result.exit_code or 1
                 tool_run.error = (
                     f"server exited before client start "
-                    f"(rc={server_result.exit_code}): {detail}"
+                    f"(rc={server_result.exit_code}): {detail[:300]}"
                 )
-                self.on_event(f"[{scenario.id}] {plan.adapter.name} FAILED: {tool_run.error}")
+                self.on_event(f"{tag} FAILED: server exited before client start "
+                              f"(rc={server_result.exit_code})")
+                self._log_output(tag, "server", server_result.stdout, detail)
                 return tool_run
 
+        self.on_event(f"{tag} client $ {plan.client_command}")
         result = self.client.run(plan.client_command, timeout=plan.timeout_s)
         tool_run.exit_code = result.exit_code
         tool_run.duration_s = result.duration_s
 
+        server_stderr = ""
         for background in backgrounds:
             server_result = background.stop()
+            server_stderr = server_stderr or server_result.stderr.strip()
             if not result.ok and server_result.stderr and not tool_run.error:
                 tool_run.error = (
                     f"client rc={result.exit_code}; server stderr: "
@@ -224,7 +232,11 @@ class Orchestrator:
             tool_run.error = tool_run.error or (
                 f"client rc={result.exit_code}: {result.stderr.strip()[:500]}"
             )
-            self.on_event(f"[{scenario.id}] {plan.adapter.name} FAILED: {tool_run.error}")
+            timeout_hint = " (timed out)" if result.exit_code == 124 else ""
+            self.on_event(f"{tag} FAILED: client rc={result.exit_code}{timeout_hint}")
+            self._log_output(tag, "client", result.stdout, result.stderr)
+            if server_stderr:
+                self._log_output(tag, "server", "", server_stderr)
             return tool_run
 
         try:
@@ -237,6 +249,17 @@ class Orchestrator:
         measurements.extend(derive_jitter(measurements))
         tool_run.measurements = self._stamp(measurements, scenario)
         return tool_run
+
+    def _log_output(self, tag: str, side: str, stdout: str, stderr: str) -> None:
+        """Echo captured tool output to the event stream (the runner Job log),
+        so failures are diagnosable without digging the raw files out of the
+        runner pod's /tmp."""
+        for stream, text in (("stderr", stderr), ("stdout", stdout)):
+            text = (text or "").strip()
+            if not text:
+                continue
+            for line in text.splitlines()[-40:]:  # last 40 lines is plenty
+                self.on_event(f"{tag} {side} {stream}| {line}")
 
     def _save_raw(self, run_id: str, tool: str, stdout: str, stderr: str) -> None:
         if self.output_dir is None:

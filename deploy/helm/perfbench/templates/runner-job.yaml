@@ -74,6 +74,9 @@ spec:
             {{- if .Values.runner.keepPods }}
             - --keep-pods
             {{- end }}
+            {{- if .Values.runner.verbose }}
+            - --verbose
+            {{- end }}
             - --db=/tmp/perfbench.sqlite
             - --output-dir=/tmp/raw
             - --push=http://{{ include "perfbench.fullname" . }}-exporter:{{ .Values.exporter.port }}

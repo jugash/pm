@@ -14,10 +14,21 @@ Commands:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 import click
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Verbose mode logs the literal commands executed (full `kubectl exec …`,
+    in-pod VLAN setup, kills) to stderr — visible in the runner Job logs."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("debug| %(message)s"))
+    root = logging.getLogger("perfbench")
+    root.handlers = [handler]
+    root.setLevel(logging.DEBUG if verbose else logging.WARNING)
 
 from perfbench import __version__
 from perfbench.capture.preflight import fatal_failures, run_preflight
@@ -352,11 +363,14 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--settle", default=1.0, show_default=True)
 @click.option("--push", "push_url", default=None)
 @click.option("--keep-pods", is_flag=True, help="Leave pods running for debugging.")
+@click.option("--verbose", "-v", is_flag=True,
+              help="Log the literal commands executed (kubectl exec, in-pod VLAN "
+                   "setup, kills) — shows in the runner Job logs.")
 def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
             server_node, networks, client_ip, server_ip, nic_resource,
             isolated_cpus_resource, onload_resource,
             vlan_id, base_interface, vlan_interface, client_vlan_ip, server_vlan_ip,
-            db, output_dir, skip_preflight, settle, push_url, keep_pods):
+            db, output_dir, skip_preflight, settle, push_url, keep_pods, verbose):
     """Provision benchmark pods, run k8s scenarios end-to-end, tear down.
 
     Fully self-contained: renders pods that request isolated CPUs and (for
@@ -370,6 +384,12 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
     from perfbench.config.schema import Platform
     from perfbench.runner.k8s import K8sBenchSession
 
+    _configure_logging(verbose)
+    click.echo(
+        f"provisioning: networks={list(networks)} nic_resource={nic_resource!r} "
+        f"onload_resource={onload_resource!r} vlan_id={vlan_id} "
+        f"base_iface={base_interface} vlan_iface={vlan_interface}"
+    )
     selected = _select(load_scenarios(path), ids)
     skipped = [s.id for s in selected if s.platform is not Platform.K8S]
     scenarios_k8s = [s for s in selected if s.platform is Platform.K8S]
@@ -449,6 +469,18 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
             failed += _report_records(records, sc.id, push_url)
         except PerfBenchError as exc:
             click.echo(f"ERROR [{sc.id}]: {exc}", err=True)
+            # dump pod events — where CNI / device-plugin / NAD failures surface
+            # when a pod never reaches Ready (e.g. deviceID network not created)
+            for role in ("client", "server"):
+                pod = session.pod_name(sc, role)
+                try:
+                    events = kubectl.describe_events(pod)
+                except PerfBenchError:
+                    events = ""
+                if events:
+                    click.echo(f"  events [{pod}]:", err=True)
+                    for line in events.splitlines():
+                        click.echo(f"    {line}", err=True)
             failed += 1
         finally:
             if not keep_pods:
