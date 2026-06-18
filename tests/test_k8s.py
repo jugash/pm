@@ -242,6 +242,27 @@ class TestPodExecutor(unittest.TestCase):
         k, fake = _kubectl()
         PodExecutor(k, "bench-server").start("sockperf server")
         self.assertTrue(fake.calls[0].startswith("START kubectl -n perfbench exec"))
+        # server runs in its own session so it can be group-killed later
+        self.assertIn("setsid /bin/sh -c", fake.calls[0])
+        self.assertIn("echo $! >", fake.calls[0])
+
+    def test_stop_kills_in_pod_process_group(self):
+        # killing the local kubectl doesn't reach the pod; stop must signal the
+        # server's process group inside the pod so its port is freed (multi-rep)
+        k, fake = _kubectl()
+        bg = PodExecutor(k, "bench-server").start("sockperf server")
+        fake.calls.clear()
+        bg.stop()
+        kill = "\n".join(fake.calls)
+        self.assertIn("exec bench-server", kill)
+        self.assertIn('kill -TERM -"$pgid"', kill)
+        self.assertIn('kill -KILL -"$pgid"', kill)
+
+    def test_stop_cleanup_is_best_effort(self):
+        # a failure tearing down the in-pod process must not break the run
+        k, _ = _kubectl(responses={"kill -TERM": ExecResult("", 1, stderr="boom")})
+        bg = PodExecutor(k, "bench-server").start("sockperf server")
+        bg.stop()  # should not raise
 
     def test_stdin_rejected(self):
         k, _ = _kubectl()

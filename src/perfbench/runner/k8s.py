@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import uuid
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
@@ -222,15 +223,21 @@ class PodExecutor(Executor):
     def describe(self) -> str:
         return f"k8s:{self.kubectl.namespace}/{self.pod}"
 
-    def _exec_command(self, command: str, env: Optional[Mapping[str, str]]) -> str:
+    def _inpod(self, command: str, env: Optional[Mapping[str, str]]) -> str:
         if env:
             assigns = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in sorted(env.items()))
             command = f"env {assigns} {command}"
+        return command
+
+    def _kubectl_exec(self, inpod_command: str) -> str:
         container = f" -c {self.container}" if self.container else ""
         return (
             f"{self.kubectl.base_command()} exec {self.pod}{container} -- "
-            f"/bin/sh -c {shlex.quote(command)}"
+            f"/bin/sh -c {shlex.quote(inpod_command)}"
         )
+
+    def _exec_command(self, command: str, env: Optional[Mapping[str, str]]) -> str:
+        return self._kubectl_exec(self._inpod(command, env))
 
     def run(self, command, timeout=None, env=None, input_data=None) -> ExecResult:
         if input_data is not None:
@@ -238,7 +245,55 @@ class PodExecutor(Executor):
         return self.kubectl.executor.run(self._exec_command(command, env), timeout=timeout)
 
     def start(self, command, env=None) -> BackgroundProcess:
-        return self.kubectl.executor.start(self._exec_command(command, env))
+        # `kubectl exec` does NOT forward signals into the container, so killing
+        # the local client (the only thing the local BackgroundProcess controls)
+        # would orphan the in-pod server — it keeps running and holds its port,
+        # breaking the next repetition with EADDRINUSE. Run the server in its
+        # own session (setsid) so the whole tree has a known process-group id,
+        # record it, and `wait` so this exec stays attached for the server's
+        # lifetime (running() keeps reflecting the server, not a detached shell).
+        pidfile = f"/tmp/perfbench-srv-{uuid.uuid4().hex}.pid"
+        inner = shlex.quote(self._inpod(command, env))
+        wrapped = f"setsid /bin/sh -c {inner} & echo $! > {pidfile}; wait"
+        background = self.kubectl.executor.start(self._kubectl_exec(wrapped))
+        return PodBackground(background, self, pidfile)
+
+    def _kill_remote(self, pidfile: str) -> None:
+        """Best-effort kill of the in-pod server's whole process group, then
+        remove the pidfile. The negative pid targets the setsid process group,
+        so taskset/onload wrappers and the server all die together."""
+        script = (
+            f"pgid=$(cat {pidfile} 2>/dev/null); "
+            f'[ -n "$pgid" ] && kill -TERM -"$pgid" 2>/dev/null; '
+            f"sleep 1; "
+            f'[ -n "$pgid" ] && kill -KILL -"$pgid" 2>/dev/null; '
+            f"rm -f {pidfile}"
+        )
+        try:
+            self.kubectl.executor.run(self._kubectl_exec(script), timeout=20)
+        except ExecutionError:
+            pass  # cleanup is best-effort; pod teardown is the backstop
+
+
+class PodBackground(BackgroundProcess):
+    """A pod server whose in-pod process tree is reliably terminated on stop.
+
+    Wraps the local ``kubectl exec`` background process: ``stop`` first tears
+    down the local client, then signals the server's process group inside the
+    pod so the listening socket is released between repetitions."""
+
+    def __init__(self, inner: BackgroundProcess, executor: "PodExecutor", pidfile: str):
+        self._inner = inner
+        self._executor = executor
+        self._pidfile = pidfile
+
+    def running(self) -> bool:
+        return self._inner.running()
+
+    def stop(self) -> ExecResult:
+        result = self._inner.stop()
+        self._executor._kill_remote(self._pidfile)
+        return result
 
 
 def render_node_check_pod(
