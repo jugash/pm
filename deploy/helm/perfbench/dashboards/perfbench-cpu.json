@@ -40,15 +40,14 @@
     },
     {
       "id": 2,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "Interruptions per second by core",
       "gridPos": { "h": 9, "w": 8, "x": 8, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "refId": "A", "expr": "max by (core) (perfbench_interruptions_per_sec{scenario=~\"$scenario\", core=~\"$core\"})", "instant": true, "format": "table" }
+        { "expr": "max by (core) (perfbench_interruptions_per_sec{scenario=~\"$scenario\", core=~\"$core\"})", "legendFormat": "core {{core}}", "instant": true }
       ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } } ],
-      "options": { "xField": "core", "orientation": "vertical", "showValue": "auto", "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "1/s", "decimals": 1 } }
     },
     {
@@ -69,18 +68,23 @@
     {
       "id": 4,
       "type": "table",
-      "title": "Per-core interruption ladder (ns) — colored by magnitude",
-      "description": "Core × quantile heatmap-table; cell colour scales with interruption time. The classic sysjitter view.",
+      "title": "Per-core interruption ladder (ns) — coloured by magnitude",
+      "description": "One row per core × quantile; cell colour scales with interruption time.",
       "gridPos": { "h": 10, "w": 12, "x": 0, "y": 11 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         { "refId": "A", "expr": "max by (core, quantile) (perfbench_interruption_ns{scenario=~\"$scenario\", core=~\"$core\"})", "instant": true, "format": "table" }
       ],
       "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns", "valueLabel": "quantile" } },
-        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true }, "renameByName": { "0": "min", "0.5": "median", "0.9": "p90", "0.99": "p99", "0.999": "p99.9", "0.9999": "p99.99", "1": "max" } } }
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "scenario": false, "tool": true, "platform": true, "network_path": true, "bond": true, "rep": true, "interface": true } } },
+        { "id": "sortBy", "options": { "fields": "", "sort": [ { "field": "core" }, { "field": "quantile" } ] } }
       ],
-      "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0, "color": { "mode": "continuous-GrYlRd" }, "custom": { "cellOptions": { "type": "color-background", "mode": "gradient" }, "align": "center" } }, "overrides": [ { "matcher": { "id": "byName", "options": "core" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "auto" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } } ] } ] }
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "center" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [ { "id": "displayName", "value": "interruption" }, { "id": "unit", "value": "ns" }, { "id": "decimals", "value": 0 }, { "id": "color", "value": { "mode": "continuous-GrYlRd" } }, { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } } ] }
+        ]
+      }
     },
     {
       "id": 5,
@@ -96,15 +100,14 @@
     },
     {
       "id": 6,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "Worst-core jitter (max) by core",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "refId": "A", "expr": "max by (core) (perfbench_interruption_ns{scenario=~\"$scenario\", core=~\"$core\", quantile=\"1\"})", "instant": true, "format": "table" }
+        { "expr": "max by (core) (perfbench_interruption_ns{scenario=~\"$scenario\", core=~\"$core\", quantile=\"1\"})", "legendFormat": "core {{core}}", "instant": true }
       ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } } ],
-      "options": { "xField": "core", "orientation": "vertical", "showValue": "auto", "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0 } }
     },
     {
@@ -136,15 +139,14 @@
     },
     {
       "id": 9,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "Worst-case wakeup latency (max) by thread",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 30 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "refId": "A", "expr": "max by (thread) (perfbench_wakeup_latency_ns{scenario=~\"$scenario\", quantile=\"1\"})", "instant": true, "format": "table" }
+        { "expr": "max by (thread) (perfbench_wakeup_latency_ns{scenario=~\"$scenario\", quantile=\"1\"})", "legendFormat": "thread {{thread}}", "instant": true }
       ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } } ],
-      "options": { "xField": "thread", "orientation": "vertical", "showValue": "auto", "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0 } }
     },
 

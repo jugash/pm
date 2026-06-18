@@ -105,11 +105,15 @@ sysjitter series, and vice-versa).
   environment table.
 
 Visualization choices: categorical comparisons (per scenario / message size /
-core / thread / quantile) use **bar charts**; the scenario×quantile and
+core / thread / quantile) use **bar gauges**; the scenario×quantile and
 core×quantile matrices use **colour-background tables** (a heatmap over a
-categorical grid); trends over runs use **time series**. A true latency
-*density* heatmap (X=time, Y=latency bucket, colour=count) is intentionally
-not used: the exporter emits fixed quantiles as gauges, not histogram buckets,
-so there is no distribution to bin. If you want real density heatmaps, the
-exporter and tool adapters would need to emit Prometheus histogram
-(`_bucket`) series — ask and that can be added.
+categorical grid, cells scaled green→red by magnitude); trends over runs use
+**time series**. Bar gauges and tables render reliably from Prometheus instant
+multi-series; the dedicated **Bar chart** panel is intentionally avoided here
+because it requires a single pre-joined "wide" frame and renders empty with
+plain instant queries. A true latency *density* heatmap (X=time, Y=latency
+bucket, colour=count) is likewise not used: the exporter emits fixed quantiles
+as gauges, not histogram buckets, so there is no distribution to bin. If you
+want real density heatmaps (and a true grouped Bar chart panel), the exporter
+and tool adapters would need to emit Prometheus histogram (`_bucket`) series —
+ask and that can be added.

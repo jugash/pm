@@ -33,36 +33,39 @@
     { "id": 100, "type": "row", "title": "Comparison (msg_size=$msg_size)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
     {
       "id": 1,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "Latency by scenario — p50 / p99 / p99.9",
-      "description": "Grouped bars per scenario; read the kernel-vs-onload and bare-metal-vs-k8s deltas across groups.",
+      "description": "Three bars per scenario; the kernel-vs-onload and bare-metal-vs-k8s deltas read straight across.",
       "gridPos": { "h": 9, "w": 14, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "refId": "A", "expr": "max by (scenario, quantile) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\", quantile=~\"0.5|0.99|0.999\"})", "instant": true, "format": "table" }
+        { "refId": "A", "expr": "max by (scenario, platform, network_path) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\", quantile=\"0.5\"})", "legendFormat": "{{scenario}} ({{platform}}/{{network_path}}) p50", "instant": true },
+        { "refId": "B", "expr": "max by (scenario, platform, network_path) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\", quantile=\"0.99\"})", "legendFormat": "{{scenario}} ({{platform}}/{{network_path}}) p99", "instant": true },
+        { "refId": "C", "expr": "max by (scenario, platform, network_path) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\", quantile=\"0.999\"})", "legendFormat": "{{scenario}} ({{platform}}/{{network_path}}) p99.9", "instant": true }
       ],
-      "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns", "valueLabel": "quantile" } },
-        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true }, "renameByName": { "0.5": "p50", "0.99": "p99", "0.999": "p99.9" } } }
-      ],
-      "options": { "xField": "scenario", "orientation": "horizontal", "showValue": "auto", "stacking": "none", "groupWidth": 0.7, "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0 } }
     },
     {
       "id": 2,
       "type": "table",
-      "title": "Latency matrix (ns) — colored by magnitude",
-      "description": "Scenario × quantile heatmap-table; cell colour scales with latency.",
+      "title": "Latency matrix (ns) — coloured by magnitude",
+      "description": "One row per scenario × quantile; cell colour scales with latency (a heatmap over the categorical grid).",
       "gridPos": { "h": 9, "w": 10, "x": 14, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
         { "refId": "A", "expr": "max by (scenario, quantile) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\", quantile=~\"0.5|0.99|0.999|1\"})", "instant": true, "format": "table" }
       ],
       "transformations": [
-        { "id": "labelsToFields", "options": { "mode": "columns", "valueLabel": "quantile" } },
-        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true }, "renameByName": { "0.5": "p50", "0.99": "p99", "0.999": "p99.9", "1": "max" } } }
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "tool": true, "platform": true, "network_path": true, "bond": true, "rep": true, "interface": true, "mode": true, "test": true } } },
+        { "id": "sortBy", "options": { "fields": "", "sort": [ { "field": "scenario" }, { "field": "quantile" } ] } }
       ],
-      "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0, "color": { "mode": "continuous-GrYlRd" }, "custom": { "cellOptions": { "type": "color-background", "mode": "gradient" }, "align": "center" } }, "overrides": [ { "matcher": { "id": "byName", "options": "scenario" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "auto" } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } } ] } ] }
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "center" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [ { "id": "displayName", "value": "latency" }, { "id": "unit", "value": "ns" }, { "id": "decimals", "value": 0 }, { "id": "color", "value": { "mode": "continuous-GrYlRd" } }, { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } } ] }
+        ]
+      }
     },
 
     { "id": 101, "type": "row", "title": "Latency detail", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 } },
@@ -80,30 +83,28 @@
     },
     {
       "id": 4,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "Percentile ladder (latest, msg_size=$msg_size)",
       "description": "Full distribution min→max for the selected scenario(s).",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 11 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "refId": "A", "expr": "max by (quantile) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\"})", "instant": true, "format": "table" }
+        { "expr": "max by (scenario, quantile) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", msg_size=~\"$msg_size\"})", "legendFormat": "{{scenario}} p{{quantile}}", "instant": true }
       ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } } ],
-      "options": { "xField": "quantile", "orientation": "vertical", "showValue": "auto", "xTickLabelRotation": -45, "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "options": { "displayMode": "basic", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0 } }
     },
     {
       "id": 5,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "p99 latency vs message size (latest)",
-      "description": "Bars per message size — the latency/size curve. Pick one scenario for a clean read.",
+      "description": "One bar per message size — the latency/size curve. Pick one scenario for a clean read.",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "targets": [
-        { "refId": "A", "expr": "max by (msg_size) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", quantile=\"0.99\"})", "instant": true, "format": "table" }
+        { "expr": "max by (msg_size) (perfbench_latency_ns{scenario=~\"$scenario\", tool=~\"$tool\", quantile=\"0.99\"})", "legendFormat": "{{msg_size}} B", "instant": true }
       ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } } ],
-      "options": { "xField": "msg_size", "orientation": "vertical", "showValue": "auto", "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "ns", "decimals": 0 } }
     },
     {
@@ -131,15 +132,12 @@
     },
     {
       "id": 8,
-      "type": "barchart",
+      "type": "bargauge",
       "title": "Transaction rate (netperf)",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 29 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "targets": [
-        { "refId": "A", "expr": "max by (scenario) (perfbench_transactions_per_sec{scenario=~\"$scenario\"})", "instant": true, "format": "table" }
-      ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } } ],
-      "options": { "xField": "scenario", "orientation": "horizontal", "showValue": "auto", "legend": { "showLegend": false }, "tooltip": { "mode": "single" } },
+      "targets": [ { "expr": "max by (scenario) (perfbench_transactions_per_sec{scenario=~\"$scenario\"})", "legendFormat": "{{scenario}}", "instant": true } ],
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 0 } }
     },
     {
