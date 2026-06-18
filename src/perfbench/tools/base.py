@@ -68,13 +68,17 @@ def data_path_ip(scenario: Scenario) -> str:
     We read the address *at runtime* inside the pod from the resolved interface
     name — symmetric on both sides and independent of the (dynamic) IPAM.
 
+    When a VLAN network is layered on the NIC the data-path interface is the
+    VLAN sub-interface (e.g. ``vlan0``), so tools bind there rather than the
+    bare port.
+
     Returns ``""`` for non-k8s scenarios or when the interface name has not
     been resolved yet (e.g. ``perfbench plan`` previews), so callers simply
     skip binding and behave exactly as before.
     """
-    if not device_plugin(scenario) or not scenario.nic.resolved:
+    iface = scenario.nic.data_path_interface()
+    if not device_plugin(scenario) or iface == "<resolved-at-runtime>":
         return ""
-    iface = scenario.nic.interface
     return (
         f"$(ip -o -4 addr show dev {iface} scope global "
         f"| awk '{{print $4}}' | cut -d/ -f1 | head -n1)"

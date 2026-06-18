@@ -46,14 +46,22 @@ DEFAULT_ISOLATED_CPUS_RESOURCE = "perfbench.io/isolated-cpus"
 DEFAULT_ONLOAD_RESOURCE = "perfbench.io/onload"
 
 
-def _networks_annotation(networks: Sequence[str], static_ip: Optional[str]) -> str:
+def _networks_annotation(
+    networks: Sequence[str],
+    static_ip: Optional[str],
+    data_path_interface: Optional[str] = None,
+) -> str:
     """Render the Multus ``networks`` annotation.
 
     Plain comma-joined names normally; the JSON form when a static IP is
     requested for the first (data-path) network — per-pod ``ips`` requires
     the NAD's IPAM to be ``{"type": "static"}``.
+
+    ``data_path_interface`` pins the in-pod name of the first (data-path)
+    network. This makes the base secondary interface deterministic so a VLAN
+    can be created on top of it inside the pod (``ip link … type vlan``).
     """
-    if not static_ip:
+    if not static_ip and not data_path_interface:
         return ", ".join(networks)
     entries = []
     for i, network in enumerate(networks):
@@ -62,7 +70,10 @@ def _networks_annotation(networks: Sequence[str], static_ip: Optional[str]) -> s
         if ns:
             entry["namespace"] = ns
         if i == 0:
-            entry["ips"] = [static_ip]
+            if data_path_interface:
+                entry["interface"] = data_path_interface
+            if static_ip:
+                entry["ips"] = [static_ip]
         entries.append(entry)
     return json.dumps(entries)
 
@@ -293,6 +304,12 @@ class K8sBenchSession:
     self-contained: render pods -> apply -> wait Ready -> resolve the
     data-path address (secondary Multus network if configured, else pod IP)
     -> run -> tear down.
+
+    Networks may be chart-created or **pre-existing** NADs referenced by
+    (optionally namespaced) name. Addresses are taken from the static ``ips``
+    request when given, otherwise read from the pod's Multus ``network-status``
+    — so NADs that run their own IPAM (whereabouts/host-local) work too, for
+    both the base network and the VLAN.
     """
 
     def __init__(
@@ -309,6 +326,11 @@ class K8sBenchSession:
         server_ip: Optional[str] = None,
         isolated_cpus_resource: str = DEFAULT_ISOLATED_CPUS_RESOURCE,
         onload_resource: str = DEFAULT_ONLOAD_RESOURCE,
+        vlan_id: Optional[int] = None,
+        vlan_interface: str = "vlan0",
+        base_interface: str = "net1",
+        client_vlan_ip: Optional[str] = None,
+        server_vlan_ip: Optional[str] = None,
     ):
         self.kubectl = kubectl
         self.image = image
@@ -322,6 +344,15 @@ class K8sBenchSession:
         # static IPs (CIDR form, e.g. 192.168.100.2/24) requested via the
         # Multus annotation on the first network; needs static-IPAM NAD
         self.static_ips = {"client": client_ip, "server": server_ip}
+        # optional VLAN layered on the NIC *inside the pod*: after the pods are
+        # Ready the harness creates ``vlan_interface`` on top of the base
+        # secondary interface (``base_interface``) with the static role IP, so
+        # the pod has both the base port and the VLAN, and benchmarks run over
+        # the VLAN.
+        self.vlan_id = vlan_id
+        self.vlan_interface = vlan_interface
+        self.base_interface = base_interface
+        self.vlan_ips = {"client": client_vlan_ip, "server": server_vlan_ip}
 
     def pod_name(self, scenario: Scenario, role: str) -> str:
         # RFC 1123 label, 63 chars max. Truncate the scenario id, never the
@@ -345,13 +376,22 @@ class K8sBenchSession:
                 static_ip=self.static_ips[role],
                 isolated_cpus_resource=self.isolated_cpus_resource,
                 onload_resource=self.onload_resource,
+                # pin the base secondary iface so the in-pod VLAN can ride it
+                data_path_interface=self.base_interface if self.vlan_id else None,
             )
             self.kubectl.apply(manifest)
         for role in ("server", "client"):
             self.kubectl.wait_ready(self.pod_name(scenario, role), self.ready_timeout_s)
 
+        if self.vlan_id is not None:
+            for role in ("server", "client"):
+                self._setup_vlan(self.pod_name(scenario, role), role)
+
         server_pod = self.pod_name(scenario, "server")
-        if self.static_ips["server"]:
+        if self.vlan_id is not None:
+            # benchmarks run over the VLAN: its static IP is the data-path addr
+            address = self.vlan_ips["server"].split("/")[0]
+        elif self.static_ips["server"]:
             # statically assigned via the networks annotation: known up front
             address = self.static_ips["server"].split("/")[0]
         elif self.networks:
@@ -363,6 +403,34 @@ class K8sBenchSession:
             server_pod=server_pod,
             server_address=address,
         )
+
+    def _setup_vlan(self, pod: str, role: str) -> None:
+        """Create the VLAN interface on top of the base port, inside the pod.
+
+        Runs ``ip link … type vlan`` in the pod (needs NET_ADMIN, which the
+        bench pods carry) so the tag rides the very interface Multus moved in,
+        and assigns the role's static VLAN IP. The base port stays present
+        (untagged); benchmarks run over the VLAN."""
+        ip = self.vlan_ips[role]
+        if not ip:
+            raise ExecutionError(
+                f"vlan_id set but no {role} VLAN IP; pass --{role}-vlan-ip "
+                "(CIDR) so the in-pod VLAN interface can be addressed"
+            )
+        executor = PodExecutor(self.kubectl, pod)
+        command = (
+            f"ip link set {self.base_interface} up && "
+            f"ip link add link {self.base_interface} name {self.vlan_interface} "
+            f"type vlan id {self.vlan_id} && "
+            f"ip addr add {ip} dev {self.vlan_interface} && "
+            f"ip link set {self.vlan_interface} up"
+        )
+        result = executor.run(command, timeout=30)
+        if not result.ok:
+            raise ExecutionError(
+                f"failed to create VLAN {self.vlan_interface} (id {self.vlan_id}) "
+                f"on {self.base_interface} in pod {pod}: {result.stderr.strip()}"
+            )
 
     def executors(self, deployment: BenchDeployment) -> tuple[Executor, Executor]:
         """(client, server) executors for the orchestrator."""
@@ -436,6 +504,7 @@ def render_benchmark_pod(
     static_ip: Optional[str] = None,
     isolated_cpus_resource: str = DEFAULT_ISOLATED_CPUS_RESOURCE,
     onload_resource: str = DEFAULT_ONLOAD_RESOURCE,
+    data_path_interface: Optional[str] = None,
 ) -> str:
     """Render a low-latency benchmark pod manifest (device-plugin model).
 
@@ -459,6 +528,10 @@ def render_benchmark_pod(
     set ``nic_resource`` only for the SR-IOV-device-plugin model, which also
     needs a VF resource request. A static ``ips`` request on the data-path
     network is supported either way.
+
+    ``data_path_interface`` pins the in-pod name of the base secondary
+    interface (e.g. ``net1``) so a VLAN can later be layered on top of it
+    inside the pod (see :meth:`K8sBenchSession._setup_vlan`).
     """
     isolated_count = str(scenario.cpu.request_count(role))
     resources: dict = {
@@ -499,7 +572,9 @@ def render_benchmark_pod(
     }
     if networks:
         metadata["annotations"] = {
-            "k8s.v1.cni.cncf.io/networks": _networks_annotation(networks, static_ip)
+            "k8s.v1.cni.cncf.io/networks": _networks_annotation(
+                networks, static_ip, data_path_interface=data_path_interface
+            )
         }
 
     spec: dict = {

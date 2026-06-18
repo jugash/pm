@@ -4,7 +4,7 @@
 # so the suite is verifiable on machines without pytest. `make pytest` runs the
 # same suite under pytest/pytest-cov when the dev extras are installed.
 
-PY ?= python3
+PY ?= .venv/bin/python
 DOCKER ?= docker        # or podman
 VERSION ?= 0.1.0
 REGISTRY ?= ghcr.io/jugash

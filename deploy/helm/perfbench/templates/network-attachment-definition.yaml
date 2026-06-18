@@ -28,8 +28,10 @@ spec:
       "cniVersion": "0.3.1",
       "type": "host-device",
       "name": {{ .Values.nad.name | quote }},
-      {{- /* select the host PF to relocate: device name, or pciBusID/hwaddr */}}
-      {{- if .Values.nad.device }}
+      {{- if .Values.nad.deviceID }}
+      {{- /* PF's PCI (deviceID) injected at runtime instead of a static selector */}}
+      "capabilities": { "deviceID": true },
+      {{- else if .Values.nad.device }}
       "device": {{ .Values.nad.device | quote }},
       {{- else if .Values.nad.pciBusID }}
       "pciBusID": {{ .Values.nad.pciBusID | quote }},

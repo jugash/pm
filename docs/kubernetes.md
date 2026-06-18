@@ -158,6 +158,62 @@ perfbench k8s-run scenarios/ -s k8s-onload-net \
 (Drop `--client-ip/--server-ip` when the NAD does dynamic IPAM. PF-IOV needs
 no `--nic-resource`; add it only for the SR-IOV model.)
 
+## Running over a VLAN
+
+To benchmark a tagged path, layer a VLAN on the data-path NIC. The VLAN is
+created **inside the pod**, on top of the secondary interface Multus moved in
+— so the tag rides the very same interface, and the pod ends up with **both**
+the base port (e.g. `net1`) and the VLAN (`vlan0`):
+
+```bash
+helm upgrade perfbench deploy/helm/perfbench -n perfbench --reuse-values \
+  --set runner.vlanId=100 \
+  --set runner.baseInterface=net1 --set runner.vlanInterface=vlan0 \
+  --set runner.clientVlanIp=192.168.110.1/24 \
+  --set runner.serverVlanIp=192.168.110.2/24
+```
+
+(CLI equivalent: `--vlan-id 100 --client-vlan-ip … --server-vlan-ip …`,
+optionally `--base-interface net1 --vlan-interface vlan0`.) What happens:
+
+- the base secondary interface name is pinned in the Multus annotation so it
+  is deterministic (`net1`);
+- after the pods are Ready, the harness execs into each one and creates the
+  VLAN on top of it — `ip link add link net1 name vlan0 type vlan id 100`,
+  then assigns the role's static VLAN IP and brings it up (the pods carry
+  `NET_ADMIN`, so no extra privilege is needed). No `vlan` NAD or host master
+  is involved;
+- the server's VLAN IP becomes the **data-path address** the client targets;
+- the socket benchmarks bind their local endpoint to `vlan0` (iperf3 `-B`,
+  netperf `-L`, sockperf `-i` / `--mc-rx-if` / `--mc-tx-if`), so traffic is
+  tagged. The base port stays present (untagged) but unused by the tools.
+
+`eflatency` is excluded — it measures the raw ef_vi layer, which sits below
+VLAN tagging, so it always uses the physical port.
+
+## Using pre-existing NADs
+
+The chart does not have to own the networks. If your NADs are managed
+elsewhere (a network team, a GitOps repo, a cluster operator), leave
+`nad.enabled=false` / `vlanNad.enabled=false` and just reference them by name:
+
+```bash
+helm upgrade perfbench deploy/helm/perfbench -n perfbench --reuse-values \
+  --set runner.enabled=true \
+  --set 'runner.networks={trading-data}' \
+  --set runner.vlanNetwork=netops/trading-vlan      # NAD in the netops namespace
+```
+
+- Names may be bare (`trading-data`, resolved in the pod's namespace) or
+  namespaced (`netops/trading-vlan`) for a NAD that lives elsewhere.
+- **IPAM is the NAD's choice.** Provide `runner.clientIp/serverIp` (and
+  `clientVlanIp/serverVlanIp`) only when the NAD uses static IPAM. When it runs
+  its own IPAM (whereabouts/host-local), omit them and the runner reads the
+  assigned data-path / VLAN address from the pod's `network-status` annotation.
+- For the VLAN, the runner still pins the in-pod interface name
+  (`--vlan-interface`, default `vlan0`) so binding stays deterministic
+  regardless of who created the NAD.
+
 ## How preflight works inside pods
 
 Preflight runs **inside the benchmark pods** via `oc exec`, which has an

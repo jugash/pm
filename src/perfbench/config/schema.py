@@ -142,11 +142,18 @@ class NicLayout:
     bond_mode: BondMode = BondMode.NONE
     bond_name: Optional[str] = None
     vendor: Optional[str] = None
+    # In-pod name of a VLAN interface layered on the data-path NIC (e.g.
+    # ``vlan0``), when the run attaches a VLAN network in addition to the base
+    # interface. Set programmatically by the k8s runner; when present the
+    # benchmark traffic runs over this interface instead of the bare port.
+    vlan_interface: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Any, path: str = "nic") -> "NicLayout":
         data = _expect_mapping(data, path)
-        _reject_unknown(data, {"ports", "bond_mode", "bond_name", "vendor"}, path)
+        _reject_unknown(
+            data, {"ports", "bond_mode", "bond_name", "vendor", "vlan_interface"}, path
+        )
         vendor = data.get("vendor")
         if vendor is not None:
             vendor = str(vendor).lower()
@@ -168,11 +175,17 @@ class NicLayout:
                 raise SchemaError(f"{path}.ports", "bonded layouts need >= 2 ports")
             if not bond_name:
                 raise SchemaError(f"{path}.bond_name", "required when bond_mode != none")
-        return cls(ports=ports, bond_mode=bond_mode, bond_name=bond_name, vendor=vendor)
+        vlan_interface = data.get("vlan_interface")
+        if vlan_interface is not None:
+            vlan_interface = _expect_str(vlan_interface, f"{path}.vlan_interface")
+        return cls(
+            ports=ports, bond_mode=bond_mode, bond_name=bond_name, vendor=vendor,
+            vlan_interface=vlan_interface,
+        )
 
     @property
     def interface(self) -> str:
-        """The interface traffic actually flows over (bond device or port).
+        """The base interface traffic flows over (bond device or port).
 
         Returns a placeholder for unresolved ports; the orchestrator always
         resolves names per host before building commands.
@@ -180,6 +193,14 @@ class NicLayout:
         if self.bond_name:
             return self.bond_name
         return self.ports[0].name or "<resolved-at-runtime>"
+
+    def data_path_interface(self) -> str:
+        """The interface benchmark traffic actually uses.
+
+        The VLAN interface when one is layered on the NIC (the run attaches a
+        VLAN network in addition to the base port), otherwise the base
+        :attr:`interface`."""
+        return self.vlan_interface or self.interface
 
     @property
     def resolved(self) -> bool:

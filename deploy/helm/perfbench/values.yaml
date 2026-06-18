@@ -44,6 +44,11 @@ dashboards:
 
 # Multus NetworkAttachmentDefinition for the benchmark data path (the
 # low-latency Solarflare NIC).
+#
+# Pre-existing NADs: leave nad.enabled=false and just point runner.networks at
+# the existing NAD's name (use "namespace/name" for a NAD in another
+# namespace). The runner reads the data-path address from network-status, so
+# NADs with their own IPAM (whereabouts/host-local) work without static IPs.
 nad:
   enabled: false
   name: sfc-lowlat
@@ -55,9 +60,11 @@ nad:
   #   sriov: SR-IOV-device-plugin model; ties the NAD to a VF resource (set
   #     sriov.* below and runner.nicResource).
   type: host-device
-  # host-device: which host PF to relocate. Use the netdev name, or instead
-  # set pciBusID / hwaddr (one of the three). With a partitioned card, point
-  # client/server at different PFs (or pin nodes that each expose this name).
+  # host-device: which host PF to relocate. Either let it be selected at run
+  # time (deviceID: true emits `capabilities: {deviceID: true}`, so Multus/the
+  # device plugin injects the PF's PCI address), or pick one statically via
+  # device / pciBusID / hwaddr. deviceID wins when true.
+  deviceID: false
   device: ens2f0
   pciBusID: ""
   hwaddr: ""
@@ -117,6 +124,14 @@ runner:
   # Leave empty when the NAD has whereabouts/host-local IPAM.
   clientIp: ""            # e.g. 192.168.100.1/24
   serverIp: ""            # e.g. 192.168.100.2/24
+  # In-pod VLAN: set vlanId to create a VLAN on top of the base secondary
+  # interface (baseInterface) inside each pod. The pod keeps both interfaces
+  # and benchmarks run over vlanInterface with these static IPs.
+  vlanId: ""              # e.g. 100 (empty = no VLAN)
+  baseInterface: net1     # in-pod name of the secondary interface to ride
+  vlanInterface: vlan0    # in-pod name to give the created VLAN
+  clientVlanIp: ""        # e.g. 192.168.110.1/24
+  serverVlanIp: ""        # e.g. 192.168.110.2/24
   # NIC extended resource to request — ONLY for the SR-IOV model. Empty for
   # PF-IOV/host-device, where Multus moves the PF into the pod (no resource).
   nicResource: ""

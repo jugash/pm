@@ -362,6 +362,18 @@ class TestInterfaceSelection(unittest.TestCase):
         sc = k8s_scenario(nic={"vendor": "0x1924", "ports": [{"card": "x2522-a"}]})
         self.assertNotIn("-B ", _tool("iperf3").client_command(sc, "10.0.0.2"))
 
+    def test_tools_bind_to_vlan_interface_when_configured(self):
+        # VLAN layered on the NIC: tools bind to the VLAN sub-interface (vlan0),
+        # not the base port (net1)
+        sc = k8s_scenario(nic={
+            "vendor": "0x1924",
+            "ports": [{"name": "net1", "numa_node": 0}],
+            "vlan_interface": "vlan0",
+        }, network_path="kernel", onload=None)
+        cmd = _tool("iperf3").client_command(sc, "192.168.110.2")
+        self.assertIn("dev vlan0 scope global", cmd)
+        self.assertNotIn("dev net1 ", cmd)
+
 
 if __name__ == "__main__":
     unittest.main()

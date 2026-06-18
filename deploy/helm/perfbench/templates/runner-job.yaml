@@ -57,6 +57,17 @@ spec:
             {{- if .Values.runner.onloadResource }}
             - --onload-resource={{ .Values.runner.onloadResource }}
             {{- end }}
+            {{- if .Values.runner.vlanId }}
+            - --vlan-id={{ .Values.runner.vlanId }}
+            - --base-interface={{ .Values.runner.baseInterface }}
+            - --vlan-interface={{ .Values.runner.vlanInterface }}
+            {{- end }}
+            {{- if .Values.runner.clientVlanIp }}
+            - --client-vlan-ip={{ .Values.runner.clientVlanIp }}
+            {{- end }}
+            {{- if .Values.runner.serverVlanIp }}
+            - --server-vlan-ip={{ .Values.runner.serverVlanIp }}
+            {{- end }}
             {{- if .Values.runner.skipPreflight }}
             - --skip-preflight
             {{- end }}

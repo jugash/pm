@@ -81,7 +81,7 @@ class SfntStream(ToolAdapter):
         if scenario.multicast:
             mcast = (
                 f"--mcast={scenario.multicast.group} "
-                f"--mcastintf={scenario.nic.interface} "
+                f"--mcastintf={scenario.nic.data_path_interface()} "
             )
         command = (
             f"{self.params['binary']} --msgsize={self.params['msg_size']} "

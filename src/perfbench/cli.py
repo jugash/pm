@@ -334,6 +334,18 @@ def _report_records(records, scenario_id, push_url):
 @click.option("--onload-resource", default=DEFAULT_ONLOAD_RESOURCE, show_default=True,
               help="Device-plugin resource that mounts the Onload devices and "
                    "injects ONLOAD_LIB (bypass scenarios).")
+@click.option("--vlan-id", type=int, default=None,
+              help="802.1Q VLAN id. When set, the harness creates a VLAN on top "
+                   "of the base secondary interface INSIDE each pod; the pod keeps "
+                   "both interfaces and benchmarks run over the VLAN.")
+@click.option("--base-interface", default="net1", show_default=True,
+              help="In-pod name of the base secondary interface the VLAN rides on.")
+@click.option("--vlan-interface", default="vlan0", show_default=True,
+              help="In-pod name to give the created VLAN interface.")
+@click.option("--client-vlan-ip", default=None,
+              help="Static IP (CIDR) for the client VLAN interface.")
+@click.option("--server-vlan-ip", default=None,
+              help="Static IP (CIDR) for the server VLAN interface.")
 @click.option("--db", default="results/perfbench.sqlite", show_default=True)
 @click.option("--output-dir", default="results/raw", show_default=True)
 @click.option("--skip-preflight", is_flag=True)
@@ -343,6 +355,7 @@ def _report_records(records, scenario_id, push_url):
 def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
             server_node, networks, client_ip, server_ip, nic_resource,
             isolated_cpus_resource, onload_resource,
+            vlan_id, base_interface, vlan_interface, client_vlan_ip, server_vlan_ip,
             db, output_dir, skip_preflight, settle, push_url, keep_pods):
     """Provision benchmark pods, run k8s scenarios end-to-end, tear down.
 
@@ -377,11 +390,21 @@ def k8s_run(path, ids, namespace, context, kubeconfig, image, client_node,
         nic_resource=nic_resource,
         isolated_cpus_resource=isolated_cpus_resource,
         onload_resource=onload_resource,
+        vlan_id=vlan_id,
+        vlan_interface=vlan_interface,
+        base_interface=base_interface,
+        client_vlan_ip=client_vlan_ip,
+        server_vlan_ip=server_vlan_ip,
     )
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     store = ResultStore(db)
     failed = 0
     for sc in scenarios_k8s:
+        if vlan_id is not None:
+            # benchmarks run over the VLAN interface created inside the pod
+            from dataclasses import replace
+
+            sc = replace(sc, nic=replace(sc.nic, vlan_interface=vlan_interface))
         try:
             node_results: list[dict] = []
             if not skip_preflight:

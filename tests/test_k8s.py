@@ -176,6 +176,56 @@ class TestStaticIps(unittest.TestCase):
         applied = "\n".join(c for c in fake.calls if "apply" in c)
         self.assertNotIn("--output json", applied)
 
+    def test_vlan_pins_base_interface_in_annotation(self):
+        import json as _json
+
+        # in-pod VLAN: the base secondary iface name is pinned so the VLAN can
+        # be created on top of it deterministically
+        manifest = self._render(
+            networks=("sfc-lowlat",), data_path_interface="net1",
+        )
+        entries = _json.loads(
+            manifest["metadata"]["annotations"]["k8s.v1.cni.cncf.io/networks"]
+        )
+        self.assertEqual(entries[0]["name"], "sfc-lowlat")
+        self.assertEqual(entries[0]["interface"], "net1")
+
+    def test_session_creates_vlan_in_pod(self):
+        from perfbench.runner.k8s import K8sBenchSession
+
+        kubectl, fake = _kubectl()  # no network-status query needed
+        session = K8sBenchSession(
+            kubectl, image="bench:1", networks=("sfc-lowlat",),
+            vlan_id=100, base_interface="net1", vlan_interface="vlan0",
+            client_vlan_ip="192.168.110.1/24", server_vlan_ip="192.168.110.2/24",
+        )
+        deployment = session.provision(make_scenario())
+        # benchmarks target the server's VLAN IP, resolved without an API call
+        self.assertEqual(deployment.server_address, "192.168.110.2")
+        self.assertFalse(any("--output json" in c for c in fake.calls))
+        # the VLAN is created inside each pod via `ip link … type vlan`
+        vlan_cmds = [c for c in fake.calls if "type vlan id 100" in c]
+        self.assertEqual(len(vlan_cmds), 2)  # server + client
+        server_cmd = next(c for c in fake.calls if "192.168.110.2/24" in c)
+        self.assertIn("ip link add link net1 name vlan0 type vlan id 100", server_cmd)
+        self.assertIn("ip addr add 192.168.110.2/24 dev vlan0", server_cmd)
+        # base interface pinned in the applied manifests
+        applied = "\n".join(c for c in fake.calls if "apply" in c)
+        self.assertNotIn("--output json", applied)
+
+    def test_session_vlan_requires_ip(self):
+        from perfbench.runner.k8s import K8sBenchSession
+        from perfbench.errors import ExecutionError
+
+        kubectl, _ = _kubectl()
+        session = K8sBenchSession(
+            kubectl, image="bench:1", networks=("sfc-lowlat",),
+            vlan_id=100, server_vlan_ip="192.168.110.2/24",  # client IP missing
+        )
+        with self.assertRaises(ExecutionError) as ctx:
+            session.provision(make_scenario())
+        self.assertIn("VLAN IP", str(ctx.exception))
+
 
 class TestPodExecutor(unittest.TestCase):
     def test_run_wraps_kubectl_exec(self):

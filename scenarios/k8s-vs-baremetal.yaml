@@ -1,55 +1,87 @@
-# Bare metal vs Kubernetes (Multus + SR-IOV VF + CPU Manager pinning),
-# plus CPU-side isolation validation on both platforms.
+# Bare metal vs Kubernetes: the same Onload substrate, two platforms.
+#
+# The two platforms get their substrate differently, so they are spelled out
+# as separate scenarios rather than a single matrix axis:
+#
+#   * bare metal pins explicit isolated cores (the harness `taskset`s to those
+#     ids on the host);
+#   * the k8s pod REQUESTS isolated CPUs from the device plugin (`cpu.count`)
+#     and reads the assigned ids from $ISOLATED_CPUS at run time. The data-path
+#     NIC is delivered by Multus (PF-IOV: a partitioned Solarflare PF moved
+#     into the pod netns) and Onload comes from the onload device plugin
+#     ($ONLOAD_LIB). The single-numa-node Topology Manager keeps them aligned.
+#
+# Deployment-time facts — namespace, image, node pinning, the Multus
+# network(s), data-path IPs and any VLAN — are NOT in this file; they are
+# supplied to `perfbench k8s-run` (or the Helm runner.* values) at run time.
 
-matrices:
-  - id_template: "{platform}-onload-net"
-    base:
-      description: Same Onload config, bare metal vs k8s pod with SR-IOV VF
-      platform: baremetal         # overridden by axis
-      network_path: onload
-      onload:
-        profile: latency
-        env: { EF_POLL_USEC: "100000" }
-      nic:
-        vendor: "0x1924"          # resolved per host/pod at run time
-        ports:
-          - { card: x2522-a, numa_node: 0 }
-      cpu:
-        client_cores: [4]
-        server_cores: [4]
-        irq_cores: [2]
-        require_isolated: true
-      tools:
-        - name: sfnt-pingpong
-          params: { msg_sizes: [64, 256], duration_s: 10, spin: true }
-        - name: sockperf
-          params: { mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
-      repetitions: 5
-      tags: [platform-comparison]
-    axes:
-      platform: [baremetal, k8s]
+scenarios:
+  # ── Network latency: bare metal vs k8s pod, same Onload config ──────────
+  - id: bm-onload-net
+    description: Bare metal, Onload, single Solarflare port
+    platform: baremetal
+    network_path: onload
+    onload: &onload { profile: latency, env: { EF_POLL_USEC: "100000" } }
+    nic: &nic
+      vendor: "0x1924"            # Solarflare; resolved per host/pod at run time
+      ports:
+        - { card: x2522-a, numa_node: 0 }
+    cpu:
+      client_cores: [4]           # explicit isolated cores on the host
+      server_cores: [4]
+      irq_cores: [2]
+      numa_node: 0
+      require_isolated: true
+    tools: &net_tools
+      - name: sfnt-pingpong
+        params: { msg_sizes: [64, 256], duration_s: 10, spin: true }
+      - name: sockperf
+        params: { mode: under-load, msg_size: 64, mps: 100000, duration_s: 30 }
+    repetitions: 5
+    tags: [platform-comparison]
 
-  - id_template: "{platform}-cpu-isolation"
-    base:
-      description: CPU jitter + scheduler latency on isolated cores
-      platform: baremetal
-      network_path: kernel
-      nic:
-        vendor: "0x1924"
-        ports:
-          - { card: x2522-a, numa_node: 0 }
-      cpu:
-        client_cores: [4, 6]
-        server_cores: [4, 6]
-        require_isolated: true
-      tools:
-        - name: sysjitter
-          params: { runtime_s: 30, threshold_ns: 200 }
-        # cyclictest is optional (rt-tests + numactl-devel are unreachable
-        # from airgapped builds). Uncomment where the binary is installed:
-        # - name: cyclictest
-        #   params: { duration_s: 30 }
-      repetitions: 3
-      tags: [cpu, jitter]
-    axes:
-      platform: [baremetal, k8s]
+  - id: k8s-onload-net
+    description: k8s pod, Onload, PF-IOV NIC + device-plugin isolated CPUs
+    platform: k8s
+    network_path: onload
+    onload: *onload
+    nic: *nic
+    cpu:
+      count: 1                    # request 1 isolated CPU per role (no fixed ids)
+      numa_node: 0
+      require_isolated: true
+    tools: *net_tools
+    repetitions: 5
+    tags: [platform-comparison]
+
+  # ── CPU isolation validation: jitter on isolated cores ──────────────────
+  - id: bm-cpu-isolation
+    description: Bare metal CPU jitter on isolated cores
+    platform: baremetal
+    network_path: kernel
+    nic: *nic
+    cpu:
+      client_cores: [4, 6]
+      server_cores: [4, 6]
+      require_isolated: true
+    tools: &cpu_tools
+      - name: sysjitter
+        params: { runtime_s: 30, threshold_ns: 200 }
+      # cyclictest is optional (rt-tests + numactl-devel are unreachable from
+      # airgapped builds). Uncomment where the binary is installed:
+      # - name: cyclictest
+      #   params: { duration_s: 30 }
+    repetitions: 3
+    tags: [cpu, jitter]
+
+  - id: k8s-cpu-isolation
+    description: k8s pod CPU jitter on device-plugin isolated cores
+    platform: k8s
+    network_path: kernel
+    nic: *nic
+    cpu:
+      count: 2                    # request 2 isolated CPUs; pin to $ISOLATED_CPUS
+      require_isolated: true
+    tools: *cpu_tools
+    repetitions: 3
+    tags: [cpu, jitter]

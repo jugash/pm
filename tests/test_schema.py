@@ -98,6 +98,15 @@ class TestNicLayout(unittest.TestCase):
         self.assertEqual(nic.interface, "ens1f0")
         self.assertEqual(nic.label(), "none:ens1f0")
 
+    def test_data_path_interface_prefers_vlan(self):
+        base = NicLayout.from_dict({"ports": [{"name": "net1"}]})
+        self.assertEqual(base.data_path_interface(), "net1")  # no vlan -> base
+        vlan = NicLayout.from_dict(
+            {"ports": [{"name": "net1"}], "vlan_interface": "vlan0"}
+        )
+        self.assertEqual(vlan.interface, "net1")               # base unchanged
+        self.assertEqual(vlan.data_path_interface(), "vlan0")  # traffic over vlan
+
     def test_bond_requires_two_ports(self):
         with self.assertRaises(SchemaError):
             NicLayout.from_dict(
