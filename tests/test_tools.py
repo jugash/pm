@@ -137,6 +137,31 @@ class TestSfntPingpong(unittest.TestCase):
         self.assertIn("--maxms=5000", client)
         self.assertIn("--spin", client)
         self.assertTrue(client.endswith("tcp 10.0.0.2"))
+        # defaults add no port/affinity/mcast flags
+        self.assertNotIn("--port", client)
+        self.assertNotIn("--affinity", client)
+        self.assertNotIn("--mcast", client)
+
+    def test_port_pinned_on_both_ends(self):
+        tool = _tool("sfnt-pingpong", port=2049)
+        self.assertIn("--port=2049", tool.server_command(make_scenario()))
+        self.assertIn("--port=2049", tool.client_command(make_scenario(), "10.0.0.2"))
+
+    def test_affinity_quoted_to_protect_semicolon(self):
+        tool = _tool("sfnt-pingpong", affinity="4;6")
+        client = tool.client_command(make_scenario(), "10.0.0.2")
+        self.assertIn("--affinity='4;6'", client)   # quoted: ';' not a shell sep
+        # affinity is a client-side option (communicated to the server)
+        self.assertNotIn("--affinity", tool.server_command(make_scenario()))
+
+    def test_multicast_sets_group_and_interface(self):
+        sc = make_scenario(
+            multicast={"group": "239.1.1.1", "port": 12000},
+            tools=[{"name": "sfnt-pingpong", "params": {"protocol": "udp"}}],
+        )
+        client = _tool("sfnt-pingpong", protocol="udp").client_command(sc, "239.1.1.1")
+        self.assertIn("--mcast=239.1.1.1", client)
+        self.assertIn("--mcastintf=ens1f0", client)   # the resolved data-path iface
 
     def test_parse(self):
         m = _tool("sfnt-pingpong").parse(SFNT_OUTPUT)

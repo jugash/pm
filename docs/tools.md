@@ -23,8 +23,12 @@ under `onload`, sweeping message sizes in one invocation.
 | `msg_sizes` | [32,64,256,1024] | swept via `--sizes` |
 | `duration_s` | 10 | per size (`--maxms`) |
 | `spin` | true | `--spin` busy-wait (always pair with pinned, isolated cores) |
+| `port` | _(sfnt default)_ | pin sfnt's control port (`--port`, set on both ends — the server can't negotiate it) |
+| `affinity` | _(none)_ | sfnt's own `--affinity` as `"client;server"` (e.g. `"4;6"`); leave unset to rely on the harness `taskset` |
 
-Emits per `msg_size`: `latency_ns` (q 0/0.5/0.99/1), `latency_mean_ns`,
+When the scenario carries a `multicast` block (UDP), the client adds
+`--mcast=<group> --mcastintf=<data-path iface>` (the VLAN sub-interface when
+one is configured). Emits per `msg_size`: `latency_ns` (q 0/0.5/0.99/1), `latency_mean_ns`,
 `latency_stddev_ns`, `iterations_count`. The `%ile` column is sfnt's default
 99th percentile.
 
