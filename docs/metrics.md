@@ -83,13 +83,33 @@ min(perfbench_tool_ok) == 0
 
 ## Dashboards
 
-Two dashboards ship in the chart (sidecar-discovered ConfigMap) and in
-`deploy/helm/perfbench/dashboards/` for manual import:
+Two domain dashboards ship in the chart (sidecar-discovered ConfigMap) and in
+`deploy/helm/perfbench/dashboards/` for manual import. They are split by
+domain on purpose: each derives its template variables from its **own** metric
+family, so the `scenario`/`msg_size` and `scenario`/`core` pickers only ever
+list values that actually exist for that domain (network scenarios don't emit
+sysjitter series, and vice-versa).
 
-- **PerfBench — Overview** (`perfbench-overview`): p99/p50 and tail-jitter
-  bar gauges across scenarios, worst per-core OS jitter, failure/staleness
-  stats, environment table.
-- **PerfBench — Scenario Drill-down** (`perfbench-drilldown`): quantile
-  trends over time (run-over-run regression tracking), latency vs message
-  size, sysjitter per core, cyclictest, drops/retransmits, per-rep tool
-  success timeline.
+- **PerfBench — Network** (`perfbench-network`): variables from
+  `perfbench_latency_ns` (scenario / tool / msg_size). Comparison table
+  (p50/p99/p99.9 pivoted per scenario), p99 + tail-jitter bar gauges, quantile
+  trends over time, full percentile ladder, latency-vs-size, mean±stddev,
+  throughput (iperf3), transaction rate (netperf), drops/retransmits/loss/UDP
+  jitter, per-rep success timeline, environment table.
+- **PerfBench — CPU** (`perfbench-cpu`): variables from
+  `perfbench_interruption_ns` + `perfbench_wakeup_latency_ns` (scenario /
+  core). Per-core jitter p99.9 bar gauge (isolation thresholds), interrupts/s
+  and worst-max **bar charts** by core, the classic per-core interruption
+  ladder as a **colour-scaled table** (core × quantile), jitter-over-time,
+  time-interrupted %, cyclictest wakeup min/avg/max, failure/staleness stats,
+  environment table.
+
+Visualization choices: categorical comparisons (per scenario / message size /
+core / thread / quantile) use **bar charts**; the scenario×quantile and
+core×quantile matrices use **colour-background tables** (a heatmap over a
+categorical grid); trends over runs use **time series**. A true latency
+*density* heatmap (X=time, Y=latency bucket, colour=count) is intentionally
+not used: the exporter emits fixed quantiles as gauges, not histogram buckets,
+so there is no distribution to bin. If you want real density heatmaps, the
+exporter and tool adapters would need to emit Prometheus histogram
+(`_bucket`) series — ask and that can be added.

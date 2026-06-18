@@ -11,8 +11,8 @@ metadata:
     grafana_folder: {{ .Values.dashboards.folderAnnotation | quote }}
   {{- end }}
 data:
-  perfbench-overview.json: |-
-{{ .Files.Get "dashboards/perfbench-overview.json" | indent 4 }}
-  perfbench-drilldown.json: |-
-{{ .Files.Get "dashboards/perfbench-drilldown.json" | indent 4 }}
+  perfbench-network.json: |-
+{{ .Files.Get "dashboards/perfbench-network.json" | indent 4 }}
+  perfbench-cpu.json: |-
+{{ .Files.Get "dashboards/perfbench-cpu.json" | indent 4 }}
 {{- end }}
