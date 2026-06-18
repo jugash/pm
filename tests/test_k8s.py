@@ -450,6 +450,28 @@ class TestRenderBenchmarkPod(unittest.TestCase):
         self.assertNotIn("annotations", pod["metadata"])
         self.assertNotIn("nodeName", pod["spec"])
 
+    def test_nic_resource_requested_on_kernel_path_too(self):
+        # deviceID NADs need their device-plugin resource requested on every
+        # scenario, or the network never gets created and the pod won't start
+        text = render_benchmark_pod(
+            name="b", scenario=kernel_scenario(), role="server", image="img",
+            nic_resource="amd.com/sfc",
+        )
+        requests = yaml.safe_load(text)["spec"]["containers"][0]["resources"]["requests"]
+        self.assertEqual(requests["amd.com/sfc"], "1")
+
+    def test_empty_onload_resource_adds_no_request(self):
+        # one resource bundles NIC + Onload: nic_resource carries it, the
+        # separate onload request is disabled with an empty onload_resource
+        text = render_benchmark_pod(
+            name="b", scenario=make_scenario(), role="server", image="img",
+            nic_resource="amd.com/sfc", onload_resource="",
+        )
+        requests = yaml.safe_load(text)["spec"]["containers"][0]["resources"]["requests"]
+        self.assertEqual(requests["amd.com/sfc"], "1")
+        self.assertNotIn("", requests)              # no invalid empty key
+        self.assertNotIn("perfbench.io/onload", requests)
+
 
 if __name__ == "__main__":
     unittest.main()

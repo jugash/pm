@@ -68,6 +68,12 @@ nad:
   device: ens2f0
   pciBusID: ""
   hwaddr: ""
+  # When deviceID is true the deviceID/PCI is injected from a device-plugin
+  # resource, so the NAD must name it (k8s.v1.cni.cncf.io/resourceName) AND the
+  # pods must request it on EVERY scenario — set this to the same value as
+  # runner.nicResource. Kernel scenarios fail to start otherwise (no deviceID
+  # -> no network).
+  resourceName: ""        # e.g. amd.com/sfc
   # IPAM for the benchmark subnet. Dynamic (default): whereabouts assigns from
   # the range. Static: use {"type": "static"} and set runner.clientIp/serverIp
   # so each pod requests its IP via the Multus annotation.
@@ -132,9 +138,14 @@ runner:
   vlanInterface: vlan0    # in-pod name to give the created VLAN
   clientVlanIp: ""        # e.g. 192.168.110.1/24
   serverVlanIp: ""        # e.g. 192.168.110.2/24
-  # NIC extended resource to request — ONLY for the SR-IOV model. Empty for
-  # PF-IOV/host-device, where Multus moves the PF into the pod (no resource).
+  # NIC device-plugin resource to request. Requested on EVERY scenario (kernel
+  # included). Required for the SR-IOV model and for any host-device NAD that
+  # uses capabilities:{deviceID:true} (must match nad.resourceName) — without
+  # it the deviceID isn't injected and the pod never starts. Leave empty only
+  # for pure PF-IOV host-device with a statically-named device.
   nicResource: ""
+  # Set onloadResource empty if nicResource already bundles the Onload userland
+  # (the LD_PRELOAD still happens on onload scenarios, driven by network_path).
   # Device-plugin resources the benchmark pods request. The isolated-cpus
   # plugin injects ISOLATED_CPUS (taskset target); the onload plugin mounts
   # /dev/onload + /dev/onload_epoll, injects the library and sets ONLOAD_LIB

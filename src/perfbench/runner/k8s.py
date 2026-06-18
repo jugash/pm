@@ -578,11 +578,16 @@ def render_benchmark_pod(
     requesting both would double-count. ``memory`` requests==limits and the
     single-numa-node Topology Manager keeps cores and devices NUMA-aligned.
 
-    The data-path NIC is attached via the Multus annotation. With PF-IOV the
-    CNI moves a Solarflare PF into the pod netns and no resource is requested;
-    set ``nic_resource`` only for the SR-IOV-device-plugin model, which also
-    needs a VF resource request. A static ``ips`` request on the data-path
-    network is supported either way.
+    The data-path NIC is attached via the Multus annotation. ``nic_resource``
+    is the device-plugin resource that delivers the NIC and is requested on
+    *every* scenario (kernel included) — required when the NAD uses
+    ``capabilities: {deviceID: true}``, since the deviceID is only injected if
+    the pod requests that resource (otherwise the CNI cannot create the network
+    and the pod never starts). With pure PF-IOV host-device (no deviceID) it
+    can be left unset. ``onload_resource`` is requested only for bypass
+    scenarios; set it empty when one resource bundles the NIC *and* Onload (the
+    Onload ``LD_PRELOAD`` still applies, driven by ``network_path``). A static
+    ``ips`` request on the data-path network is supported either way.
 
     ``data_path_interface`` pins the in-pod name of the base secondary
     interface (e.g. ``net1``) so a VLAN can later be layered on top of it
@@ -596,7 +601,7 @@ def render_benchmark_pod(
     }
     if nic_resource:
         resources[nic_resource] = "1"
-    if scenario.network_path in (NetworkPath.ONLOAD, NetworkPath.EFVI):
+    if onload_resource and scenario.network_path in (NetworkPath.ONLOAD, NetworkPath.EFVI):
         resources[onload_resource] = "1"
 
     container: dict = {

@@ -20,6 +20,11 @@ metadata:
   {{- if eq .Values.nad.type "sriov" }}
   annotations:
     k8s.v1.cni.cncf.io/resourceName: {{ printf "%s/%s" .Values.sriov.resourcePrefix .Values.sriov.resourceName }}
+  {{- else if and .Values.nad.deviceID .Values.nad.resourceName }}
+  # deviceID is injected from this device-plugin resource; pods must request it
+  # (runner.nicResource) on every scenario, or the CNI can't build the network.
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: {{ .Values.nad.resourceName }}
   {{- end }}
 spec:
   {{- if eq .Values.nad.type "host-device" }}

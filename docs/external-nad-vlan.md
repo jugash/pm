@@ -38,6 +38,15 @@ spec:
 (To target a fixed interface instead, drop `capabilities` and set
 `"device": "ens2f0"`.) No VLAN NAD is needed — the VLAN is made in the pod.
 
+> **Important:** with `deviceID` the NAD must carry
+> `k8s.v1.cni.cncf.io/resourceName: <device-plugin resource>`, and the pod must
+> **request that resource on every scenario** (pass `--nic-resource <resource>`
+> / `runner.nicResource`). The deviceID is only injected when the resource is
+> allocated; without it the CNI can't create the network and the pod never
+> starts — including `kernel`-path scenarios that don't request Onload. If one
+> resource bundles the NIC and Onload, also set `--onload-resource ""` so the
+> harness doesn't request a second, non-existent Onload resource.
+
 ## 2. What the pod gets
 
 PerfBench renders the Multus annotation referencing the external NAD and
