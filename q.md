@@ -404,3 +404,191 @@ match:
 
 *Cluster Quota Charter · v1.0 · OpenShift 4.x*
 *requests = the contract · limits = the burst · counts = the cap*
+
+
+## 13. Quotas for OpenShift Dev Spaces
+
+Dev Spaces is a special case because it creates namespaces the way system components do — automatically, one per user (default name `<username>-devspaces`, set by `CheCluster.spec.devEnvironments.defaultNamespace.template`). They never pass through the project-request template, so they get no tenant label and no team quota, and — like the platform namespaces in §12 — the default-deny guard would block workspace startup unless they are explicitly excluded. Govern them in three layers.
+
+### Layer 1 — Cap consumption at the source (`CheCluster`)
+
+The Dev Spaces-native limits are the first and most effective control. Set them on the `CheCluster` CR in the `openshift-devspaces` namespace.
+
+```yaml
+apiVersion: org.eclipse.che/v2
+kind: CheCluster
+metadata:
+  name: devspaces
+  namespace: openshift-devspaces
+spec:
+  devEnvironments:
+    maxNumberOfRunningWorkspacesPerUser: 1   # concurrent running workspaces (default 1)
+    maxNumberOfWorkspacesPerUser: 5          # total stored workspaces (default -1 = unlimited)
+    defaultContainerResources:               # applied to containers that declare none
+      requests:
+        cpu: "250m"
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    defaultNamespace:
+      autoProvision: true
+      template: <username>-devspaces
+```
+
+`maxNumberOfRunningWorkspacesPerUser` bounds how much a user can run at once — the single most effective knob. `defaultContainerResources` backstops devfiles that omit requests/limits, so no workspace container is ever unbounded.
+
+### Layer 2 — A `ResourceQuota` per user namespace
+
+Because each user has their own namespace, the correct primitive is a namespaced `ResourceQuota`, not a shared `ClusterResourceQuota` — you want to bound each user individually so one heavy user cannot starve the others. There are two ways to get that quota into every dynamically-created user namespace.
+
+#### Option A (preferred) — Dev Spaces user-namespace provisioning Template
+
+Dev Spaces injects the objects automatically through a **user-namespace provisioning Template**. On OpenShift, `Template` (`template.openshift.io/v1`) is a built-in aggregated API resource, **not a CRD** — it will not appear in `oc get crd`; confirm it with `oc api-resources | grep template.openshift.io`.
+
+```yaml
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: devspaces-user-namespace-configurator
+  namespace: openshift-devspaces
+  labels:
+    app.kubernetes.io/part-of: che.eclipse.org
+    app.kubernetes.io/component: workspaces-config
+objects:
+  - apiVersion: v1
+    kind: ResourceQuota
+    metadata:
+      name: devspaces-user-quota
+    spec:
+      hard:
+        requests.cpu: "2"
+        requests.memory: 4Gi
+        limits.cpu: "4"
+        limits.memory: 8Gi
+        pods: "20"
+        persistentvolumeclaims: "5"
+        requests.storage: 20Gi
+  - apiVersion: v1
+    kind: LimitRange
+    metadata:
+      name: devspaces-user-limits
+    spec:
+      limits:
+        - type: Container
+          default: { cpu: "1", memory: 2Gi }
+          defaultRequest: { cpu: "250m", memory: 512Mi }
+          max: { cpu: "2", memory: 4Gi }
+```
+
+**How the Template is selected and applied.** The Template does not choose namespaces — it is an inert object. The **Dev Spaces operator** is the actor: it watches its own install namespace for objects carrying a specific label pair and clones their contents into every user namespace. Selection is by convention, not by any selector in the Template.
+
+- **Location.** The Template must live in `openshift-devspaces` (where the `CheCluster` CR is). The operator watches only that namespace; a Template elsewhere is ignored.
+- **Labels.** The operator recognizes an object as user-namespace config only if it carries both `app.kubernetes.io/part-of: che.eclipse.org` and `app.kubernetes.io/component: workspaces-config`. That pair is the entire selection mechanism. Note the value is `workspaces-config` on the *source* Template — distinct from `workspaces-namespace`, which is the label the operator stamps on the *target* user namespaces (and which the fleet quota below selects on). Two labels, two roles; easy to confuse.
+- **Scope.** It applies to **all** user namespaces the operator provisions — there is no per-user or per-group targeting, so the `ResourceQuota` in the Template becomes the same personal budget for everyone.
+- **Timing.** Objects are applied during namespace synchronization, which happens when a user **starts a workspace** — not eagerly for users who have never launched one.
+- **Re-sync.** Editing the resource in `openshift-devspaces` is immediately replicated to all user namespaces. To raise everyone's budget you edit the one Template; you never touch individual namespaces. Conversely, a manual edit to a `ResourceQuota` inside a user namespace is reverted back to the Template's version.
+
+#### Option B — Kyverno `generate` policy
+
+If you would rather keep quota governance in one policy engine alongside the §12 rules — or want the same behavior on a cluster where you prefer not to rely on the operator's sync — a Kyverno `generate` policy achieves the identical result. It matches the operator's target label on each user namespace and injects the objects, with `generateExisting: true` to backfill namespaces that already exist and `synchronize: true` so later policy edits propagate.
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: devspaces-user-namespace-quota
+spec:
+  generateExisting: true
+  rules:
+    - name: add-quota
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/component: workspaces-namespace
+      generate:
+        apiVersion: v1
+        kind: ResourceQuota
+        name: devspaces-user-quota
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            hard:
+              requests.cpu: "2"
+              requests.memory: 4Gi
+              limits.cpu: "4"
+              limits.memory: 8Gi
+              pods: "20"
+              persistentvolumeclaims: "5"
+              requests.storage: 20Gi
+    - name: add-limitrange
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+              selector:
+                matchLabels:
+                  app.kubernetes.io/component: workspaces-namespace
+      generate:
+        apiVersion: v1
+        kind: LimitRange
+        name: devspaces-user-limits
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            limits:
+              - type: Container
+                default: { cpu: "1", memory: 2Gi }
+                defaultRequest: { cpu: "250m", memory: 512Mi }
+                max: { cpu: "2", memory: 4Gi }
+```
+
+Use one or the other, not both — the Template and the Kyverno policy would fight over the same `ResourceQuota`. Prefer Option A on OpenShift (it is Dev Spaces' own supported mechanism); reach for Option B when you want a single policy engine or need it on non-OpenShift.
+
+### Layer 3 — A fleet cap for all of Dev Spaces (optional)
+
+Layers 1–2 bound each *user*, but not the *sum*. To cap the aggregate footprint of the whole feature, add one `ClusterResourceQuota` that selects every user namespace by the label the operator stamps on them. This is how Dev Spaces fits the per-team model: treat it as a single pseudo-tenant with its own top-level budget, divided fairly underneath by the per-user quotas.
+
+```yaml
+apiVersion: quota.openshift.io/v1
+kind: ClusterResourceQuota
+metadata:
+  name: devspaces-fleet
+spec:
+  selector:
+    labels:
+      matchLabels:
+        app.kubernetes.io/component: workspaces-namespace
+  quota:
+    hard:
+      requests.cpu: "64"
+      requests.memory: 128Gi
+      limits.cpu: "96"
+      limits.memory: 192Gi
+      persistentvolumeclaims: "200"
+```
+
+### Don't forget the admission guard
+
+Because user namespaces are operator-created and carry `app.kubernetes.io/part-of: che.eclipse.org` rather than a tenant label, the default-deny policy from §12 will block workspace startup unless they are excluded. Exclude by the Che label (more robust than a `*-devspaces` name glob, since it survives a template rename):
+
+```yaml
+# Kyverno — add to the require-tenant-label policy's exclude block
+exclude:
+  any:
+    - resources:
+        selector:
+          matchLabels:
+            app.kubernetes.io/part-of: che.eclipse.org
+```
+
+---
+
+*Cluster Quota Charter · v1.0 · OpenShift 4.x*
+*requests = the contract · limits = the burst · counts = the cap*
+
