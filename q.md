@@ -332,6 +332,74 @@ The policy only holds if the quota objects themselves are protected and reviewed
 
 > **The one rule to never break:** A workload must never run unquoted. Every project belongs to a team, every team has a `ClusterResourceQuota`, and every container gets requests and limits from the `LimitRange`. Miss any link in that chain and a single tenant can take the cluster down.
 
+### Excluding system namespaces (`openshift-*`, `kube-*`)
+
+Platform namespaces must never be captured by tenant quota — a floor imposed on `openshift-monitoring` or `kube-system` would throttle the cluster's own control plane. With the label-selector model they are excluded **automatically**: system namespaces are created by the installer and operators, never through the project-request template, so they never carry a `tenant.company.io/team` label and no team quota ever matches them.
+
+The corollary matters: **a `ClusterResourceQuota` selector cannot match by name.** Label selectors do equality and set membership only — there is no `openshift-*` glob. So don't model exclusion as "everything except `openshift-*`"; model inclusion as "only projects carrying a tenant label", which the per-team `matchLabels` already does. For any *catch-all* quota, make that condition explicit with a set-based selector so a stray namespace can't slip in:
+
+```yaml
+spec:
+  selector:
+    labels:
+      matchExpressions:
+        - key: tenant.company.io/team
+          operator: Exists        # only projects that carry a team label
+```
+
+**Where names do matter — the admission guard.** The default-deny policy above rejects any project created *without* a tenant label. Applied cluster-wide it would also reject the operators' own `openshift-*` namespaces and break the cluster, so the name-based exclusion list lives here (both engines support name globs).
+
+Kyverno:
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-tenant-label
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: must-have-team-label
+      match:
+        any:
+          - resources:
+              kinds: ["Namespace"]
+      exclude:
+        any:
+          - resources:
+              names:                 # glob-matched
+                - "openshift-*"
+                - "kube-*"
+                - "kube-node-lease"
+                - "kube-public"
+                - "default"
+                - "openshift"
+      validate:
+        message: "Projects must carry tenant.company.io/team"
+        pattern:
+          metadata:
+            labels:
+              tenant.company.io/team: "?*"
+```
+
+Gatekeeper (uses `excludedNamespaces`, which supports prefix/suffix globs):
+
+```yaml
+match:
+  kinds:
+    - apiGroups: [""]
+      kinds: ["Namespace"]
+  excludedNamespaces:
+    - "openshift-*"
+    - "kube-*"
+    - "kube-node-lease"
+    - "kube-public"
+    - "default"
+    - "openshift"
+```
+
+> **The bypass to close:** the template only stamps the team label on projects created the normal way (`oc new-project` / a `ProjectRequest`). A cluster-admin who runs `oc create namespace foo` directly skips the template, so `foo` gets no label, no quota, and no LimitRange — an unbounded namespace. The admission guard above is exactly what closes that hole: with it in place an unlabeled, non-system namespace is rejected at creation.
+
 ---
 
 *Cluster Quota Charter · v1.0 · OpenShift 4.x*
