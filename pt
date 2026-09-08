@@ -1,0 +1,17 @@
+You'll stand up and operate the SFTPGo platform on OpenShift as code — provisioning the environment with Terraform, packaging the runtime and its dependencies (database, object storage) as Helm charts, and managing client accounts and configuration declaratively through Helm and SFTPGo's API rather than by hand. You'll build the GitOps and CI/CD pipelines that make onboarding a self-service pull request, own reliability and operability (monitoring, backups, runbooks), and work with security and network engineers to expose and harden the service safely. You'll also support the migration off the legacy platform, wave by wave, and write the templates and docs that let application teams run on the paved road you've built.
+
+Essential skills & experience
+Production experience with Kubernetes / OpenShift.
+Helm — authoring and maintaining charts, not just installing them.
+Terraform — reusable, reviewed modules and managed state across real environments.
+CI/CD and GitOps (e.g. GitLab CI, GitHub Actions, Tekton; Argo CD or Flux), with Git-centred, PR-based workflows.
+Solid Linux fundamentals and scripting (Bash plus one of Python / Go).
+Comfortable with containers, registries, secrets management and TLS/PKI basics.
+An automation-first, declarative mindset — allergic to undocumented manual changes.
+Desirable
+Exposure to SFTPGo or other MFT / file-transfer platforms (Axway, GoAnywhere, IBM Sterling, MOVEit).
+Working knowledge of SFTP / SSH and network fundamentals (firewalls, NAT, DMZ, load balancing).
+PostgreSQL operations and S3-compatible / OpenShift Data Foundation (ODF) object storage.
+HashiCorp Vault / External Secrets; policy-as-code (OPA / Kyverno).
+Red Hat (EX280) or Kubernetes (CKA / CKAD) certification.
+Experience migrating a legacy system into containers with parallel-run cutovers.
